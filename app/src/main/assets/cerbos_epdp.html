@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+</head>
+<body>
+<script type="module">
+    import { Embedded, AutoUpdatingLoader } from "https://esm.run/@cerbos/embedded@0.11";
+
+    const output = document.getElementById("cerbos");
+
+    async function loadCerbos(url) {
+        window.cerbos = new Embedded(
+          new AutoUpdatingLoader(url, {
+            onLoad: (metadata) => {
+                output.innerHTML = "Loaded Cerbos";
+                AndroidBridge.notifyPDPReady();
+            }
+          })
+        );
+    }
+
+    output.innerHTML = "Cerbos SDK loaded...";
+    window.loadCerbos = loadCerbos;
+    AndroidBridge.notifySDKLoaded();
+</script>
+<div id="cerbos">Initalizing Cerbos...</div>
+</body>
+</html>
