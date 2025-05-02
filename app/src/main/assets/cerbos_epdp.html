@@ -13,9 +13,11 @@
         window.cerbos = new Embedded(
           new AutoUpdatingLoader(url, {
             onLoad: (metadata) => {
-                output.innerHTML = "Loaded Cerbos";
                 AndroidBridge.notifyPDPReady();
-            }
+            },
+            // onDecision: (log) => {
+            //    AndroidBridge.onDecision(log);
+            // }
           })
         );
     }

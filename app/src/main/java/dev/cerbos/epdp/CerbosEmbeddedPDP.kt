@@ -102,7 +102,7 @@ class CerbosEmbeddedPDP @JvmOverloads constructor(
                     }
                 }
             },
-            onDecision = { log ->
+            onDecisionHandler = { log ->
                 Log.d(TAG, "Received decision from JS: $log")
                 // Run on the main thread
                 mainHandler.post {

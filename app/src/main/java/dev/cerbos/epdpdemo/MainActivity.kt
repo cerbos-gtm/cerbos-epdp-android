@@ -33,15 +33,15 @@ class MainActivity : AppCompatActivity() {
         cerbosEmbeddedPDP.setOnReadyListener {
             Log.d("App", "PDP is ready")
             cerbosEmbeddedPDP.checkResources(
-                dev.cerbos.epdp.CerbosEmbeddedPDP.CheckResourcesRequest(
-                    principal = dev.cerbos.epdp.CerbosEmbeddedPDP.Principal(
+                CerbosEmbeddedPDP.CheckResourcesRequest(
+                    principal = CerbosEmbeddedPDP.Principal(
                         id = "123",
                         policyVersion = "default",
                         roles = listOf("user"),
                     ),
                     resources = listOf(
-                        dev.cerbos.epdp.CerbosEmbeddedPDP.Resource(
-                            resource = dev.cerbos.epdp.CerbosEmbeddedPDP.ResourceObject(
+                        CerbosEmbeddedPDP.Resource(
+                            resource = CerbosEmbeddedPDP.ResourceObject(
                                 id = "456",
                                 kind = "resource",
                                 policyVersion = "default",
@@ -53,6 +53,7 @@ class MainActivity : AppCompatActivity() {
                     )
                 )
             )
+
         }
 
         cerbosEmbeddedPDP.loadEmbeddedPDP("https://lite.cerbos.cloud/bundle?workspace=7SRBU5GTJZKS&label=f481a2c9c90ee3ae4deae7b7f656d65d1cd608828f5853d21e9ca383d479223a")

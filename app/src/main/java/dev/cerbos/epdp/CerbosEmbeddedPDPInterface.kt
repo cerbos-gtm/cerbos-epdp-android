@@ -4,7 +4,7 @@ import android.webkit.JavascriptInterface
 
 class CerbosEmbeddedPDPInterface(
     private val dispatcher: (String, String) -> Unit,
-    private val onDecision: (String) -> Unit,
+    private val onDecisionHandler: (String) -> Unit,
     private val pdpReadyHandler: () -> Unit,
     private val sdkLoadedHandler: () -> Unit
 ) {
@@ -15,7 +15,7 @@ class CerbosEmbeddedPDPInterface(
 
     @JavascriptInterface
     fun onDecision(log: String) {
-        onDecision(log)
+        onDecisionHandler(log)
     }
 
     @JavascriptInterface
