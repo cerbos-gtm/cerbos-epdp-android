@@ -22,11 +22,7 @@
 
                     />
 
-                <dev.cerbos.epdp.CerbosEmbeddedPDPWebView
-                    android:id="@+id/cerbosPDP"
-                    android:layout_width="0dp"
-                    android:layout_height="0dp"
-                    android:visibility="gone" />
+
         </LinearLayout>
 
 </androidx.constraintlayout.widget.ConstraintLayout>

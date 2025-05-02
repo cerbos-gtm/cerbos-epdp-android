@@ -6,13 +6,13 @@ import android.util.Log
 import androidx.appcompat.app.AppCompatActivity
 import android.view.Menu
 import android.view.MenuItem
-import dev.cerbos.epdp.CerbosEmbeddedPDPWebView
+import dev.cerbos.epdp.CerbosEmbeddedPDP
 import dev.cerbos.epdpdemo.databinding.ActivityMainBinding
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
-    private lateinit var cerbosEmbeddedPDP: CerbosEmbeddedPDPWebView
+    private lateinit var cerbosEmbeddedPDP: CerbosEmbeddedPDP
 
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -33,18 +33,15 @@ class MainActivity : AppCompatActivity() {
         cerbosEmbeddedPDP.setOnReadyListener {
             Log.d("App", "PDP is ready")
             cerbosEmbeddedPDP.checkResources(
-                dev.cerbos.epdp.CerbosEmbeddedPDPWebView.CheckResourcesRequest(
-                    requestId = null,
-
-                    principal = dev.cerbos.epdp.CerbosEmbeddedPDPWebView.Principal(
+                dev.cerbos.epdp.CerbosEmbeddedPDP.CheckResourcesRequest(
+                    principal = dev.cerbos.epdp.CerbosEmbeddedPDP.Principal(
                         id = "123",
                         policyVersion = "default",
-                        roles = listOf(),
-
+                        roles = listOf("user"),
                     ),
                     resources = listOf(
-                        dev.cerbos.epdp.CerbosEmbeddedPDPWebView.Resource(
-                            resource = dev.cerbos.epdp.CerbosEmbeddedPDPWebView.ResourceObject(
+                        dev.cerbos.epdp.CerbosEmbeddedPDP.Resource(
+                            resource = dev.cerbos.epdp.CerbosEmbeddedPDP.ResourceObject(
                                 id = "456",
                                 kind = "resource",
                                 policyVersion = "default",

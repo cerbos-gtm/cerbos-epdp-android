@@ -6,17 +6,19 @@ import android.os.Handler
 import android.os.Looper
 import android.util.AttributeSet
 import android.util.Log
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.encodeToString
+
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
-import kotlinx.serialization.InternalSerializationApi
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
+import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import com.fasterxml.jackson.module.kotlin.registerKotlinModule
 
-class CerbosEmbeddedPDPWebView @JvmOverloads constructor(
+
+val mapper = jacksonObjectMapper().registerKotlinModule()
+
+class CerbosEmbeddedPDP @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null
 ) : FrameLayout(context, attrs) {
@@ -194,7 +196,7 @@ class CerbosEmbeddedPDPWebView @JvmOverloads constructor(
         if(request.requestId == null){
             request.requestId = UUID.randomUUID().toString()
         }
-        val jsonString = Json.encodeToString(request)
+        val jsonString = mapper.writeValueAsString(request)
 
         enqueueJavascriptCall("window.cerbos.checkResources($jsonString)") {
             Log.d(TAG, "Resources check result: $it")
@@ -208,14 +210,14 @@ class CerbosEmbeddedPDPWebView @JvmOverloads constructor(
         var timeoutRunnable: Runnable? = null
     )
 
-    @Serializable
+
     data class CheckResourcesRequest(
         var requestId: String? = null,
         val principal: Principal,
         val resources: List<Resource>,
     )
 
-    @Serializable
+
     data class Principal(
         val id: String,
         val policyVersion: String,
@@ -223,13 +225,13 @@ class CerbosEmbeddedPDPWebView @JvmOverloads constructor(
         val attr: Map<String, Any?> = emptyMap(),
     )
 
-    @Serializable
+
     data class Resource(
         val resource: ResourceObject,
         val actions: List<String>,
     )
 
-    @Serializable
+
     data class ResourceObject(
         val id: String,
         val kind: String,
