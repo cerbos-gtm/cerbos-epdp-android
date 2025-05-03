@@ -140,4 +140,12 @@ class MainActivity : AppCompatActivity() {
             binding.statusTextView.text = message
         }
     }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        if (::cerbosEmbeddedPDP.isInitialized) { // Check if initialized
+            cerbosEmbeddedPDP.destroy()
+        }
+    }
+
 }

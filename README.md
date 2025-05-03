@@ -43,6 +43,7 @@ The `CerbosEmbeddedPDP` component handles:
 6.  **Callback Handling:** The `JsBridge.postResponse` method receives the result, finds the corresponding pending callback using the `callId`, deserializes the JSON result into the appropriate Kotlin data class (e.g., `CheckResourcesResponse`), and invokes the original callback provided by the Android app. Callbacks are always executed on the main Android UI thread.
 7.  **Readiness Queueing:** If `checkResources` is called _before_ `pdpReady` is signaled, the call is placed in a `preReadyCallQueue`. Once `pdpReady` is signaled, this queue is flushed, and the calls are processed normally via the batching mechanism.
 8.  **Threading:** All interactions with the WebView (`evaluateJavascript`) and all callbacks back into the Android application (listeners, `checkResources` callback) are marshalled onto the main Android UI thread using `Handler(Looper.getMainLooper())` to ensure thread safety.
+9.  **Lifecycle Management:** The `CerbosEmbeddedPDP` view manages a `WebView`. To prevent memory leaks associated with WebViews holding references to the hosting Activity/Fragment's Context, a `destroy()` method is provided. This method should be called when the hosting component is destroyed (e.g., in `Activity.onDestroy()`) to properly clean up the WebView and associated resources like Handlers and callbacks.
 
 ## Features
 
@@ -129,11 +130,25 @@ Follow these steps to add the `CerbosEmbeddedPDP` to your Android project:
     _Remember to replace `dev.cerbos.epdp` with the actual package name where you placed `CerbosEmbeddedPDP.kt`._
 
 5.  **Initialize and Use in Activity/Fragment:**
+
     - Get a reference to the view (using ViewBinding is recommended).
     - Set the `onPDPReadyListener` to know when you can start making checks.
     - Call `loadEmbeddedPDP()` with the URL of your policy bundle.
     - Inside the `onPDPReadyListener`, construct your `CheckResourcesRequest` and call `checkResources()`.
     - Process the `CheckResourcesResponse` in the callback lambda.
+
+6.  **Implement Cleanup:** In your Activity or Fragment that hosts the `CerbosEmbeddedPDP` view, override `onDestroy` and call the `destroy()` method on your `CerbosEmbeddedPDP` instance. This is essential to release WebView resources and prevent memory leaks.
+
+```kotlin
+// In your Activity or Fragment
+override fun onDestroy() {
+    super.onDestroy()
+    // Check if the view reference has been initialized before calling destroy
+    if (::cerbosEmbeddedPDP.isInitialized) {
+        cerbosEmbeddedPDP.destroy()
+    }
+}
+```
 
 ## Usage Example (Kotlin)
 
@@ -231,6 +246,16 @@ class MainActivity : AppCompatActivity() {
             binding.statusTextView.text = message
         }
     }
+
+    // --- Add onDestroy for cleanup ---
+    override fun onDestroy() {
+        super.onDestroy()
+        Log.d(TAG, "Activity onDestroy: Cleaning up Cerbos PDP...")
+        // Check if the view reference has been initialized before calling destroy
+        if (::cerbosEmbeddedPDP.isInitialized) {
+            cerbosEmbeddedPDP.destroy()
+        }
+    }
 }
 ```
 
@@ -239,6 +264,7 @@ class MainActivity : AppCompatActivity() {
 - **`fun loadEmbeddedPDP(url: String)`**: Starts the asynchronous loading of the Cerbos policy bundle from the given `url`. The `onPDPReadyListener` will be invoked upon completion.
 - **`fun checkResources(request: CheckResourcesRequest, callback: (CheckResourcesResponse) -> Unit)`**: Performs a batch authorization check. The `request` object defines the principal, resources, and actions. The `callback` lambda is invoked asynchronously on the main thread with the `CheckResourcesResponse` containing the results.
 - **`var onPDPReadyListener: (() -> Unit)?`**: A lambda function invoked on the main thread when the ePDP is fully loaded and ready to process `checkResources` calls.
+- **`fun destroy()`**: Cleans up internal resources, particularly the hidden `WebView`, its JavaScript interface, and pending callbacks/handlers. **Must be called** from the `onDestroy()` method of the host Activity or Fragment to prevent memory leaks.
 
 ## Data Structures
 
@@ -267,4 +293,4 @@ Refer to the [Cerbos API documentation](https://docs.cerbos.dev/cerbos/latest/ap
 - **Performance:** Once initialized, `checkResources` calls are evaluated locally and should be fast. Performance depends on device CPU and policy complexity. Batching helps reduce JS<->Native communication overhead.
 - **WebView Security:** JavaScript is enabled for the hidden WebView. While the loaded HTML is minimal and the JS bridge interface is specific, be aware of the general security implications of running JavaScript.
 - **Error Handling:** The current implementation primarily logs errors (serialization, deserialization, JS timeouts). Consider enhancing the `checkResources` callback to include an optional error parameter for more robust error handling in your application.
-- **Memory Usage:** The WebView and the loaded WASM/JS bundle will consume memory. Monitor usage for your specific policies and device targets.
+- **Memory Usage:** The WebView and the loaded WASM/JS bundle will consume memory. Monitor usage for your specific policies and device targets. **Remember to call `destroy()`** in your Activity/Fragment's `onDestroy` method to release the WebView and prevent leaks.

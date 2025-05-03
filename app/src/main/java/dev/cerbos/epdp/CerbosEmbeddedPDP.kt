@@ -286,6 +286,24 @@ class CerbosEmbeddedPDP @JvmOverloads constructor(
         }
     }
 
+    fun destroy() {
+        Log.d(TAG, "Destroying CerbosEmbeddedPDP and its WebView.")
+        // Stop any pending handlers/runnables
+        mainThreadHandler.removeCallbacksAndMessages(null)
+        batchHandler.removeCallbacksAndMessages(null)
+        // Clean up WebView
+        webView.removeJavascriptInterface(JS_BRIDGE_NAME)
+        webView.stopLoading()
+        webView.loadUrl("about:blank") // Clear content
+        webView.onPause() // Pause JS execution, etc.
+        webView.removeAllViews()
+        webView.destroy() // Crucial step
+        // Clear collections (optional, but good practice)
+        pendingCallbacks.clear()
+        preReadyCallQueue.clear()
+        batchQueue.clear()
+    }
+
     /**
      * Performs an authorization check against the loaded Cerbos ePDP.
      *
