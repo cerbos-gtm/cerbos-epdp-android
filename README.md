@@ -268,21 +268,69 @@ class MainActivity : AppCompatActivity() {
 
 ## Data Structures
 
-The component includes nested data classes mirroring the standard Cerbos API structure for requests and responses:
+The component includes nested Kotlin data classes mirroring the standard Cerbos API structure for requests and responses.
 
-- `CheckResourcesRequest`
-- `Principal`
-- `ResourceAction`
-- `Resource`
-- `AuxData` (optional)
-- `CheckResourcesResponse`
-- `ResultEntry`
-- `ResourceIdentifier`
-- `Effect` (Enum: `EFFECT_ALLOW`, `EFFECT_DENY`, `EFFECT_UNSPECIFIED`)
-- `ValidationError` (optional)
-- `Meta` (optional)
-- `ActionMeta` (optional)
-- `OutputEntry` (optional)
+**Request Structures:**
+
+- `CheckResourcesRequest`: The main wrapper object for a `checkResources` call.
+  - `requestId`: (Optional) A unique identifier for the request. If not provided, one will be generated.
+  - `principal`: The entity (user, service) whose permissions are being checked. (See `Principal`)
+  - `resources`: A list of resources and the actions being checked against them. (See `ResourceAction`)
+  - `includeMeta`: (Optional) Set to `true` to receive metadata about policy decisions (e.g., matched policies).
+  - `auxData`: (Optional) Auxiliary data, typically including a JWT for policy evaluation. (See `AuxData`)
+- `Principal`: Defines the principal performing the action.
+  - `id`: A unique identifier for the principal.
+  - `roles`: A list of roles assigned to the principal.
+  - `policyVersion`: (Optional) The specific policy version to evaluate against for this principal.
+  - `scope`: (Optional) Hierarchical scope for the principal.
+  - `attr`: A map of arbitrary attributes associated with the principal (e.g., department, region).
+- `ResourceAction`: Associates a resource with a list of actions to be checked.
+  - `resource`: The resource being acted upon. (See `Resource`)
+  - `actions`: A list of strings representing the actions (e.g., "read", "write", "approve").
+- `Resource`: Defines the resource being acted upon.
+  - `id`: A unique identifier for the resource.
+  - `kind`: The type of resource (e.g., "document", "feature_flag", "expense_report").
+  - `policyVersion`: (Optional) The specific policy version to evaluate against for this resource.
+  - `scope`: (Optional) Hierarchical scope for the resource.
+  - `attr`: A map of arbitrary attributes associated with the resource (e.g., owner, status, region).
+- `AuxData`: Container for auxiliary data.
+  - `jwt`: (Optional) A map representing the claims from a JWT, often used in policy conditions.
+
+**Response Structures:**
+
+- `CheckResourcesResponse`: The main wrapper object for the response to a `checkResources` call.
+  - `requestId`: The identifier matching the request.
+  - `results`: A list containing the evaluation results for each `ResourceAction` in the request. (See `ResultEntry`)
+  - `error`: (Optional, Added by Bridge) A string describing an error that occurred during processing (e.g., timeout, serialization failure).
+  - `cerbosCallId`: (Optional, Added by Bridge) Internal identifier used for correlating JS calls.
+- `ResultEntry`: Contains the authorization results for a single resource.
+  - `resource`: Identifies the resource these results apply to. (See `ResourceIdentifier`)
+  - `actions`: A map where keys are the requested actions and values are their resulting effects (`EFFECT_ALLOW` or `EFFECT_DENY`). (See `Effect`)
+  - `validationErrors`: (Optional) A list of errors encountered during input validation, if any. (See `ValidationError`)
+  - `meta`: (Optional) Metadata about the decision-making process, included if `includeMeta` was true in the request. (See `Meta`)
+  - `outputs`: (Optional) Values produced by policy `output` rules during evaluation. (See `OutputEntry`)
+- `ResourceIdentifier`: A simpler representation of a resource used in responses.
+  - `id`: The unique identifier.
+  - `kind`: The type of resource.
+  - `policyVersion`: The policy version used.
+  - `scope`: The scope used.
+- `Effect`: An enum representing the outcome of an action check.
+  - `EFFECT_ALLOW`: The action is permitted.
+  - `EFFECT_DENY`: The action is forbidden.
+  - `EFFECT_UNSPECIFIED`: Should generally not occur in standard checks; treat as Deny.
+- `ValidationError`: Describes an input validation error.
+  - `path`: The field path where the error occurred.
+  - `message`: A description of the error.
+  - `source`: Indicates whether the error originated from the principal or resource attributes.
+- `Meta`: Contains metadata about the evaluation.
+  - `actions`: Metadata specific to each evaluated action. (See `ActionMeta`)
+  - `effectiveDerivedRoles`: List of derived roles that were active for the principal during evaluation.
+- `ActionMeta`: Metadata for a specific action evaluation.
+  - `matchedPolicy`: The name of the policy rule that determined the outcome.
+  - `matchedEffect`: The effect defined by the matched policy rule.
+- `OutputEntry`: Represents a value produced by a policy `output` rule.
+  - `source`: The source rule that produced the output (e.g., `resource.document.v1#view:public`).
+  - `value`: The actual value produced by the output rule.
 
 Refer to the [Cerbos API documentation](https://docs.cerbos.dev/cerbos/latest/api/grpc) for details on the fields within these structures.
 
