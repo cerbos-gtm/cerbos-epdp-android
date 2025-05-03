@@ -61,8 +61,7 @@ Follow these steps to add the `CerbosEmbeddedPDP` to your Android project:
 
 1.  **Copy Files:**
 
-    - Copy the `CerbosEmbeddedPDP.kt` file into your project's source directory (e.g., `app/src/main/java/your/package/name/`). Make sure to update the `package` declaration at the top of the file if necessary.
-    - Copy the `cerbos_epdp.html` file into your project's `app/src/main/assets/` directory. Create the `assets` directory if it doesn't exist.
+    Copy the `CerbosEmbeddedPDP.kt` file into your project's source directory (e.g., `app/src/main/java/your/package/name/`). Make sure to update the `package` declaration at the top of the file if necessary.
 
 2.  **Add Dependency:** Add the Jackson Kotlin module dependency to your app-level `build.gradle` (or `build.gradle.kts`) file:
 
@@ -153,8 +152,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
     private lateinit var cerbosEmbeddedPDP: CerbosEmbeddedPDP
 
-    // Replace with your actual policy bundle URL (e.g., from Cerbos Hub, S3, etc.)
-    private val CERBOS_BUNDLE_URL = "YOUR_POLICY_BUNDLE_URL_HERE" // *.wasm or *.js
+    // Replace with your actual policy bundle URL from Cerbos Hub
+    private val CERBOS_BUNDLE_URL = "https://lite.cerbos.cloud/bundle?workspace=...."
     private val TAG = "MainActivity"
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -270,9 +269,9 @@ Refer to the [Cerbos API documentation](https://docs.cerbos.dev/cerbos/latest/ap
 
 ## Troubleshooting / Notes
 
-- **Policy Bundle URL:** Ensure the URL provided to `loadEmbeddedPDP` is accessible from the Android device and points to a valid Cerbos policy bundle (`.wasm` recommended, `.js` also supported by `@cerbos/embedded`). Consider hosting bundles on a reliable CDN or potentially loading from local device storage (would require modifications to `cerbos_epdp.html` and potentially the `AutoUpdatingLoader`).
+- **Policy Bundle URL:** Ensure the URL provided to `loadEmbeddedPDP` is accessible from the Android device and points to a valid Cerbos policy bundle.
 - **Initialization Time:** Loading the WASM bundle and initializing the engine can take a few seconds, especially on the first run or slower devices. Use the `onPDPReadyListener` to gate calls to `checkResources`.
 - **Performance:** Once initialized, `checkResources` calls are evaluated locally and should be fast. Performance depends on device CPU and policy complexity. Batching helps reduce JS<->Native communication overhead.
-- **WebView Security:** JavaScript is enabled for the hidden WebView. While the loaded HTML is minimal and the JS bridge interface is specific, be aware of the general security implications of running JavaScript. The bridge is only exposed to the content loaded from `assets/cerbos_epdp.html`.
+- **WebView Security:** JavaScript is enabled for the hidden WebView. While the loaded HTML is minimal and the JS bridge interface is specific, be aware of the general security implications of running JavaScript.
 - **Error Handling:** The current implementation primarily logs errors (serialization, deserialization, JS timeouts). Consider enhancing the `checkResources` callback to include an optional error parameter for more robust error handling in your application.
 - **Memory Usage:** The WebView and the loaded WASM/JS bundle will consume memory. Monitor usage for your specific policies and device targets.
