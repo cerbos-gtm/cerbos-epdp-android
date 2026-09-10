@@ -1,0 +1,18 @@
+# Gradle
+.gradle/
+build/
+.kotlin/
+local.properties
+
+# Android Studio / IntelliJ
+.idea/
+*.iml
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Node (CerbosBridge)
+node_modules/
+
+# macOS
+.DS_Store
