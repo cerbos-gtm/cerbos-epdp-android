@@ -2,6 +2,7 @@ package dev.cerbos.epdpdemo
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -62,6 +63,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.cerbos.epdp.BundleSource
 import dev.cerbos.epdp.CerbosEmbeddedPDP
 import dev.cerbos.epdp.CheckResult
 import dev.cerbos.epdp.Effect
@@ -70,6 +72,7 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import kotlin.time.Duration
 import kotlin.time.DurationUnit
+import kotlinx.coroutines.flow.MutableStateFlow
 
 private val timeFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
 
@@ -80,14 +83,11 @@ private fun Instant.formatTime(): String = timeFormatter.format(atZone(ZoneId.sy
 fun DemoScreen(viewModel: DemoViewModel) {
     val pdp = viewModel.pdp
     val state by
-        (pdp?.state
-                ?: remember { kotlinx.coroutines.flow.MutableStateFlow(CerbosEmbeddedPDP.State()) })
+        (pdp?.state ?: remember { MutableStateFlow(CerbosEmbeddedPDP.State()) })
             .collectAsStateWithLifecycle()
     var showsHubSettings by rememberSaveable { mutableStateOf(false) }
     var showsMenu by remember { mutableStateOf(false) }
 
-    // Android may discard the renderer while the app is in the background; verify and rebuild on
-    // return instead of failing the first check.
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.checkHealth() }
 
     Scaffold(
@@ -142,7 +142,7 @@ fun DemoScreen(viewModel: DemoViewModel) {
     ) { padding ->
         LazyColumn(
             modifier = Modifier.padding(padding).fillMaxWidth(),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+            contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             item {
@@ -175,8 +175,6 @@ fun DemoScreen(viewModel: DemoViewModel) {
         }
     }
 }
-
-// MARK: - Sections
 
 @Composable
 private fun SectionHeader(title: String) {
@@ -243,7 +241,7 @@ private fun StatusSection(
                         LabeledContent("Rule revision", bundle.ruleRevision)
                         LabeledContent(
                             "Loaded from",
-                            if (bundle.source == dev.cerbos.epdp.BundleSource.CACHE) "Offline cache"
+                            if (bundle.source == BundleSource.CACHE) "Offline cache"
                             else "Cerbos Hub",
                         )
                         LabeledContent("Received", bundle.receivedAt.formatTime())
@@ -440,8 +438,6 @@ private fun LogsSection(logs: List<CerbosEmbeddedPDP.LogLine>) {
     }
 }
 
-// MARK: - Hub settings
-
 @Composable
 private fun HubSettingsSheet(
     initial: HubSettings,
@@ -553,8 +549,6 @@ private fun HubSettingsSheet(
         }
     }
 }
-
-// MARK: - Rows
 
 private val Green = Color(0xFF2E7D32)
 private val Orange = Color(0xFFEF6C00)

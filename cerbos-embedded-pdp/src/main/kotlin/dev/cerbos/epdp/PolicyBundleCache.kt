@@ -15,20 +15,14 @@ import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 
 /**
- * Persists the most recent Cerbos Hub policy bundle response per rule, so the embedded PDP can
- * start offline with the last known policies. Bodies are stored as received from Hub (opaque
- * binary); the bridge replays them only when the initial download fails.
- *
- * All operations run on [ioDispatcher] and are safe to call from any thread.
+ * Stores the latest Hub bundle response per cache key, so the PDP can start offline. The bridge
+ * replays it only when the first download fails.
  */
 public class PolicyBundleCache(
     public val directory: File,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) {
-    /**
-     * Uses [defaultDirectory]: the app's no-backup files directory, so bundles never leave the
-     * device.
-     */
+    /** Stores bundles in [defaultDirectory], which is excluded from backups. */
     public constructor(context: Context) : this(defaultDirectory(context))
 
     @Serializable
@@ -43,51 +37,41 @@ public class PolicyBundleCache(
     public class Cached(public val entry: Entry, public val body: ByteArray)
 
     private val json = Json { ignoreUnknownKeys = true }
-    /**
-     * Serialises writes and the discard-on-corruption path so concurrent saves cannot interleave.
-     */
     private val mutex = Mutex()
 
-    /**
-     * Returns the cached response body for the key, or `null` if there is none or it is corrupt.
-     */
+    /** The cached bundle for [key], or `null` if there is none or it is corrupt. */
     public suspend fun load(key: String): Cached? =
         withContext(ioDispatcher) { mutex.withLock { loadLocked(key) } }
 
     private fun loadLocked(key: String): Cached? {
-        run {
-            val files = files(key)
-            val entry =
-                try {
-                    json.decodeFromString(Entry.serializer(), files.entry.readText())
-                } catch (_: IOException) {
-                    null
-                } catch (_: SerializationException) {
-                    null
-                } catch (_: IllegalArgumentException) {
-                    null
-                }
-            val body =
-                try {
-                    if (files.body.isFile) files.body.readBytes() else null
-                } catch (_: IOException) {
-                    null
-                }
-            return if (
-                entry == null || entry.key != key || body == null || body.size != entry.byteCount
-            ) {
-                removeFiles(files)
+        val files = files(key)
+        val entry =
+            try {
+                json.decodeFromString(Entry.serializer(), files.entry.readText())
+            } catch (_: IOException) {
                 null
-            } else {
-                Cached(entry, body)
+            } catch (_: SerializationException) {
+                null
+            } catch (_: IllegalArgumentException) {
+                null
             }
+        val body =
+            try {
+                if (files.body.isFile) files.body.readBytes() else null
+            } catch (_: IOException) {
+                null
+            }
+        return if (
+            entry == null || entry.key != key || body == null || body.size != entry.byteCount
+        ) {
+            removeFiles(files)
+            null
+        } else {
+            Cached(entry, body)
         }
     }
 
-    /**
-     * Writes the bundle atomically. Throws [CerbosException.Cache] when the files cannot be
-     * written.
-     */
+    /** Writes the bundle atomically. Throws [CerbosException.Cache] on failure. */
     public suspend fun save(
         key: String,
         body: ByteArray,

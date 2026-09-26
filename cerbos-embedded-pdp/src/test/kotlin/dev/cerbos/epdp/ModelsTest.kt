@@ -379,7 +379,9 @@ class HubBaseUrlValidationTest {
         assertNull(CerbosEmbeddedPDP.validateHubBaseUrl("HTTPS://hub.example.com:8443/base/"))
         assertNull(CerbosEmbeddedPDP.validateHubBaseUrl("http://localhost:3592"))
         assertNull(CerbosEmbeddedPDP.validateHubBaseUrl("http://127.0.0.1:9"))
-        assertNull(CerbosEmbeddedPDP.validateHubBaseUrl("http://[::1]:9"))
+        assertTrue(
+            CerbosEmbeddedPDP.validateHubBaseUrl("http://[::1]:9") is CerbosException.InvalidRequest
+        )
         assertTrue(
             CerbosEmbeddedPDP.validateHubBaseUrl("http://10.0.2.2:3592")
                 is CerbosException.InvalidRequest

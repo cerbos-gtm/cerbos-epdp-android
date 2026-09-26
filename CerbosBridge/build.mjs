@@ -1,12 +1,6 @@
-// Builds the WebView bridge bundle and stages the Cerbos embedded PDP assets into the Android library.
-//
-//   npm run build
-//
-// Outputs (committed to the repo so the Gradle project builds without Node installed):
-//   ../cerbos-embedded-pdp/src/main/assets/cerbos-epdp/index.html
-//   ../cerbos-embedded-pdp/src/main/assets/cerbos-epdp/bridge.js
-//   ../cerbos-embedded-pdp/src/main/assets/cerbos-epdp/server.wasm
-//   ../cerbos-embedded-pdp/src/main/assets/cerbos-epdp/manifest.json
+// `npm run build`: bundles bridge.js and copies server.wasm into
+// ../cerbos-embedded-pdp/src/main/assets/cerbos-epdp, with index.html and manifest.json.
+// The output is committed so the Android build doesn't need Node.
 import { build } from "esbuild";
 import { createHash } from "node:crypto";
 import { copyFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
@@ -18,7 +12,7 @@ const require = createRequire(import.meta.url);
 const here = path.dirname(fileURLToPath(import.meta.url));
 const outDir = path.resolve(here, "..", "cerbos-embedded-pdp", "src", "main", "assets", "cerbos-epdp");
 
-// Package manifests are not on the packages' export maps, so read them from node_modules directly.
+// package.json isn't in the packages' export maps, so read it from node_modules.
 const packageJSON = async (name) => JSON.parse(await readFile(path.join(here, "node_modules", name, "package.json"), "utf8"));
 const packageVersion = async (name) => (await packageJSON(name)).version;
 const wasmSource = require.resolve("@cerbos/embedded-server/server.wasm");
@@ -27,7 +21,7 @@ const serverMetadata = JSON.parse(await readFile(path.join(serverPackageDir, "sr
 
 await mkdir(outDir, { recursive: true });
 
-// 1. Verify and copy the WebAssembly module, checking it against the checksum published by Cerbos.
+// 1. Copy server.wasm after checking it against the checksum Cerbos publishes.
 const wasmBytes = await readFile(wasmSource);
 const wasmSHA256 = createHash("sha256").update(wasmBytes).digest("hex");
 if (serverMetadata.wasmChecksum && serverMetadata.wasmChecksum !== wasmSHA256) {
@@ -35,7 +29,7 @@ if (serverMetadata.wasmChecksum && serverMetadata.wasmChecksum !== wasmSHA256) {
 }
 await copyFile(wasmSource, path.join(outDir, "server.wasm"));
 
-// 2. Bundle the bridge (IIFE, no external requests: everything the page needs is local).
+// 2. Bundle the bridge.
 const versions = {
   "@cerbos/embedded-client": await packageVersion("@cerbos/embedded-client"),
   "@cerbos/embedded-server": await packageVersion("@cerbos/embedded-server"),
@@ -48,7 +42,7 @@ await build({
   bundle: true,
   format: "iife",
   platform: "browser",
-  // Android System WebView is evergreen Chromium; this floor matches the WebView shipped with Android 8 (API 26).
+  // The WebView that shipped with Android 8 (API 26).
   target: ["chrome80"],
   minify: true,
   sourcemap: false,
@@ -59,7 +53,7 @@ await build({
   },
 });
 
-// 3. Minimal host page. The bridge script and the WASM are fetched from the same intercepted https origin.
+// 3. The host page.
 await writeFile(
   path.join(outDir, "index.html"),
   `<!doctype html>
@@ -77,9 +71,8 @@ await writeFile(
 `,
 );
 
-// 4. Manifest consumed by the Kotlin side (versions, checksum) and by humans reviewing upgrades.
-// Deliberately free of timestamps so that a rebuild from the same inputs is byte-identical and CI
-// can detect a stale or hand-edited manifest with `git diff --exit-code`.
+// 4. Versions and checksums, for reviewing upgrades. No timestamps, so CI can check the committed
+// copy is current with `git diff --exit-code`.
 const bridgeStat = await stat(path.join(outDir, "bridge.js"));
 const manifest = {
   versions,

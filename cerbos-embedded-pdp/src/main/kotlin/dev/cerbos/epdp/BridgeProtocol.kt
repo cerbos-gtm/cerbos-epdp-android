@@ -12,7 +12,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.serializer
 
-// Wire types shared with `CerbosBridge/src/core.ts` and `bridge.ts`. Keep the two in sync.
+// Wire types for `CerbosBridge/src/core.ts` and `bridge.ts`. Keep them in sync.
 
 @Serializable
 internal enum class BridgeStatus {
@@ -81,7 +81,7 @@ internal data class BridgeStatusResult(
     val error: BridgeError? = null,
 )
 
-/** Events pushed by the bridge through the `cerbosHost.postMessage` JavaScript interface. */
+/** Events the bridge sends through `cerbosHost.postMessage`. */
 internal sealed class BridgeEvent {
     data object BridgeReady : BridgeEvent()
 
@@ -180,8 +180,7 @@ internal sealed class BridgeEvent {
 internal object BridgeJson {
     val json: Json = Json {
         ignoreUnknownKeys = true
-        // Omit nulls on encode and tolerate missing fields on decode; `@cerbos/core` treats both
-        // the same.
+        // `@cerbos/core` treats missing and null fields the same.
         explicitNulls = false
         encodeDefaults = true
     }
@@ -204,7 +203,7 @@ internal object BridgeJson {
             throw CerbosException.InvalidResponse(error.message ?: error.toString())
         }
 
-    /** Unwraps a bridge envelope, mapping bridge-side failures with [failure]. */
+    /** Returns the envelope's result, or throws [failure] for its error. */
     inline fun <reified T> unwrap(
         envelopeJSON: String,
         failure: (BridgeError) -> CerbosException,
@@ -217,6 +216,27 @@ internal object BridgeJson {
         throw failure(
             envelope.error ?: BridgeError(name = "Error", message = "unknown bridge error")
         )
+    }
+
+    /**
+     * Initialises the check serializers so the first real check doesn't pay for it. Evaluated once
+     * per process, in the background while the engine starts.
+     */
+    val warmUp: Unit by lazy {
+        encode(
+            CheckResourcesRequest(
+                Principal("warm-up", listOf("warm-up"), attributesOf("a" to 1)),
+                listOf(ResourceCheck(Resource("warm-up", "warm-up"), listOf("warm-up"))),
+            )
+        )
+        unwrap<CheckResourcesResponse>(
+            """{"ok":true,"result":{"results":[{"resource":{"kind":"k","id":"i"},""" +
+                """"actions":{"a":"EFFECT_ALLOW"},"metadata":{"actions":{"a":""" +
+                """{"matchedPolicy":"p","matchedScope":""}}}}]}}"""
+        ) {
+            CerbosException.Request(it)
+        }
+        Unit
     }
 
     /** A JavaScript string literal for [value] (JSON string syntax is a subset of JavaScript's). */

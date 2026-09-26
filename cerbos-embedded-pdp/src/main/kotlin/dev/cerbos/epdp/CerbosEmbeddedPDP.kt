@@ -26,11 +26,10 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonElement
 
 /**
- * An embedded Cerbos policy decision point for Android.
+ * A Cerbos policy decision point that evaluates policies on the device.
  *
- * Runs the official `@cerbos/embedded-client` and the `@cerbos/embedded-server` WebAssembly module
- * inside a hidden web view, downloads policy bundles from Cerbos Hub, keeps them updated in the
- * background, and caches the last bundle on disk so the app can start offline.
+ * Policies come from a Cerbos Hub embedded PDP rule, are refreshed in the background, and are
+ * cached on disk so the app can start offline. The engine runs in a hidden web view.
  *
  * ```kotlin
  * val pdp = CerbosEmbeddedPDP(context, CerbosEmbeddedPDP.Configuration(ruleId = "AVGB9RP6HFBL"))
@@ -38,17 +37,14 @@ import kotlinx.serialization.json.JsonElement
  * val allowed = pdp.isAllowed(principal = alice, resource = document, action = "view")
  * ```
  *
- * State is exposed through [state]; every method may be called from any thread and switches to the
- * main thread internally. Share one instance per rule: each instance owns a web view and compiles
- * the 20 MB engine.
+ * Methods can be called from any thread. Create one instance per rule and share it: each one owns a
+ * web view and a compiled copy of the 20 MB engine.
  */
 public class CerbosEmbeddedPDP(
     context: Context,
     configuration: Configuration,
     private val cache: PolicyBundleCache = PolicyBundleCache(context),
 ) {
-    // MARK: Configuration
-
     public data class HubCredentials(val clientId: String, val clientSecret: String) {
         override fun toString(): String = "HubCredentials(clientId=$clientId, clientSecret=***)"
     }
@@ -71,52 +67,29 @@ public class CerbosEmbeddedPDP(
 
     public data class Configuration(
         /**
-         * ID of the embedded PDP rule from the deployment's "Embedded PDP rules" tab in Cerbos Hub.
+         * The embedded PDP rule ID, from the deployment's "Embedded PDP rules" tab in Cerbos Hub.
          */
         val ruleId: String,
-        /** Scopes to request when the rule requires (or allows) scoped bundles. */
         val scopes: List<String> = emptyList(),
-        /**
-         * Cerbos Hub API base URL. Defaults to `https://api.cerbos.cloud`. Must use `https`; plain
-         * `http` is only accepted for `localhost`, because the bridge page's Content Security
-         * Policy blocks every other insecure origin.
-         */
+        /** Defaults to `https://api.cerbos.cloud`. Must be `https` (or `http` on localhost). */
         val hubBaseUrl: String? = null,
-        /**
-         * Client credentials for rules that require authentication. Keep them out of source
-         * control.
-         */
+        /** Only for rules that require authentication. Keep them out of source control. */
         val credentials: HubCredentials? = null,
-        /**
-         * How often to check Hub for policy updates. `null` disables polling. Minimum 10 seconds.
-         */
+        /** How often to poll Hub for policy updates (minimum 10 s). `null` disables polling. */
         val updateInterval: Duration? = 60.seconds,
         /**
-         * Whether downloaded updates replace the active bundle immediately (otherwise call
-         * [activatePendingBundle]).
+         * `false` holds downloaded updates in [State.pendingBundle] until [activatePendingBundle].
          */
         val activateOnLoad: Boolean = true,
-        /** Upper bound for [start]: WebAssembly compilation plus the first bundle download. */
+        /** Limit for [start]: compiling the engine plus the first bundle download. */
         val startTimeout: Duration = 120.seconds,
-        /**
-         * Upper bound for a single check or plan. Evaluation takes milliseconds; this only fires on
-         * a stuck engine.
-         */
+        /** Limit for a single check or plan. */
         val requestTimeout: Duration = 30.seconds,
-        /**
-         * The first bundle download is aborted after this long so a stalled connection falls back
-         * to the offline cache. Values under one second are raised to one second.
-         */
+        /** After this long, a stalled first download gives up and the offline cache is used. */
         val initialLoadTimeout: Duration = 20.seconds,
-        /**
-         * When a check fails because the renderer process died, rebuild it and retry the check
-         * once.
-         */
+        /** Retry a check once if it failed because the web view's renderer process died. */
         val retryAfterRecovery: Boolean = true,
-        /**
-         * How many automatic rebuilds are allowed within [restartWindow] before giving up until
-         * [start], [restart] or [reconfigure] is called.
-         */
+        /** Automatic renderer rebuilds allowed per [restartWindow]. */
         val maximumRestarts: Int = 3,
         val restartWindow: Duration = 600.seconds,
         val defaultPolicyVersion: String? = null,
@@ -126,20 +99,15 @@ public class CerbosEmbeddedPDP(
         val schemaEnforcement: SchemaEnforcement = SchemaEnforcement.NONE,
         val strictEvaluation: Boolean = false,
         val userAgent: String? = null,
-        /** Extra headers sent with Hub requests. */
         val headers: Map<String, String> = emptyMap(),
         val validationErrors: ValidationErrorHandling = ValidationErrorHandling.IGNORE,
-        /** Persist the latest policy bundle so the PDP can start without connectivity. */
+        /** Save each downloaded bundle so the next start works offline. */
         val offlineCache: Boolean = true,
-        /**
-         * Receives decision log entries (same shape as the JavaScript SDK's `DecisionLogEntry`).
-         */
+        /** Receives decision log entries (the JavaScript SDK's `DecisionLogEntry` shape). */
         val onDecision: ((JsonElement) -> Unit)? = null,
-        /**
-         * Receives validation errors when [validationErrors] is [ValidationErrorHandling.REPORT].
-         */
+        /** Used when [validationErrors] is [ValidationErrorHandling.REPORT]. */
         val onValidationErrors: ((List<ValidationError>) -> Unit)? = null,
-        /** Verifies and decodes JWTs passed as auxiliary data. Required to use [AuxData.jwt]. */
+        /** Verifies a JWT passed in [AuxData.jwt] and returns its claims. */
         val jwtDecoder: (suspend (JWT) -> Map<String, JsonElement>)? = null,
     )
 
@@ -155,31 +123,20 @@ public class CerbosEmbeddedPDP(
 
     public data class LogLine(val date: Instant, val level: String, val message: String)
 
-    /** Everything observable about the PDP, published as one immutable snapshot. */
     public data class State(
         val status: Status = Status.Idle,
-        /** The policy bundle decisions are currently evaluated against. */
+        /** The bundle decisions are evaluated against. */
         val bundle: BundleInfo? = null,
-        /**
-         * A newer bundle that has been downloaded but not activated (only when
-         * [Configuration.activateOnLoad] is false).
-         */
+        /** A downloaded update waiting for [activatePendingBundle]. */
         val pendingBundle: BundleInfo? = null,
-        /** Build information of the bundled WebAssembly server. */
         val server: ServerInfo? = null,
-        /** Outcome of the most recent background update check. */
         val lastPolicyUpdate: PolicyUpdate? = null,
-        /**
-         * Recent diagnostics from the bridge (warnings, errors, cache activity). Capped at 100
-         * lines.
-         */
+        /** The last 100 diagnostic messages. */
         val logs: List<LogLine> = emptyList(),
     ) {
         val isReady: Boolean
             get() = status == Status.Ready
     }
-
-    // MARK: Observable state
 
     private val _state = MutableStateFlow(State())
     public val state: StateFlow<State> = _state.asStateFlow()
@@ -208,7 +165,7 @@ public class CerbosEmbeddedPDP(
     public val isReady: Boolean
         get() = _state.value.isReady
 
-    /** Key under which this configuration's policy bundle is cached. Matches the bridge's key. */
+    /** The offline cache key for the current configuration. */
     public val offlineCacheKey: String
         get() = offlineCacheKey(configuration)
 
@@ -217,14 +174,12 @@ public class CerbosEmbeddedPDP(
     private val mainHandler = Handler(Looper.getMainLooper())
 
     /**
-     * Incremented whenever the web view or the configuration an attempt was started under is no
-     * longer valid ([stop], [reconfigure], a renderer process termination). A start attempt that
-     * began under an older generation abandons itself instead of publishing its outcome.
+     * Bumped by [stop], [reconfigure] and renderer loss. A start attempt from an older generation
+     * drops its result.
      */
     private var startGeneration = 0
     private var startJob: Deferred<Unit>? = null
     private var startJobGeneration = 0
-    /** The generation under which [status] last became [Status.Ready]. */
     private var readyGeneration: Int? = null
     private val restartTimes = ArrayList<Instant>()
 
@@ -233,14 +188,9 @@ public class CerbosEmbeddedPDP(
         host.onProcessTerminated = ::handleProcessTermination
     }
 
-    // MARK: Lifecycle
-
     /**
-     * Loads the WebAssembly module and the policy bundle. Safe to call repeatedly; concurrent
-     * callers share one attempt. Call again after a failure to retry; this also resets the
-     * automatic restart budget ([Configuration.maximumRestarts]).
-     *
-     * Failures are reported through [state] (as [Status.Failed]) rather than by throwing.
+     * Loads the engine and the policy bundle. Idempotent; call again after a failure to retry.
+     * Failures are reported as [Status.Failed] in [state], not thrown.
      */
     public suspend fun start() {
         withContext(Dispatchers.Main.immediate) {
@@ -249,13 +199,9 @@ public class CerbosEmbeddedPDP(
         }
     }
 
-    /**
-     * Joins the in-flight start when it is still valid, otherwise launches a new attempt unless the
-     * PDP is already ready under the current generation.
-     */
+    /** Joins the current start attempt, or launches one unless already ready. */
     private suspend fun startIfNeeded() {
-        // An attempt that stop(), reconfigure() or a process termination invalidated is left to
-        // abandon itself (it may be blocked on the old web view) and is not waited for.
+        // Attempts from an older generation abandon themselves; don't wait for them.
         while (true) {
             val inFlight = startJob
             if (inFlight == null || startJobGeneration != startGeneration) break
@@ -277,10 +223,8 @@ public class CerbosEmbeddedPDP(
     }
 
     /**
-     * Applies a new configuration (rule, scopes, credentials, options) without rebuilding the web
-     * view. The already-compiled engine module is reused, so this is much cheaper than [restart]. A
-     * start that is still in progress is superseded, so the new configuration is the one that ends
-     * up running.
+     * Switches to a new configuration, reusing the compiled engine. Much cheaper than [restart]. A
+     * start in progress is superseded.
      */
     public suspend fun reconfigure(configuration: Configuration) {
         withContext(Dispatchers.Main.immediate) {
@@ -291,7 +235,7 @@ public class CerbosEmbeddedPDP(
         }
     }
 
-    /** Discards the current web view and starts again from scratch, recompiling the engine. */
+    /** Rebuilds the web view and recompiles the engine. */
     public suspend fun restart() {
         withContext(Dispatchers.Main.immediate) {
             stop()
@@ -300,11 +244,10 @@ public class CerbosEmbeddedPDP(
     }
 
     /**
-     * Verifies the renderer process is still answering. Call it when the app returns to the
-     * foreground: Android may have killed the WebView renderer while the app was in the background,
-     * and this rebuilds it before the first real check instead of failing that check.
+     * Pings the engine and rebuilds it if Android killed the renderer while the app was in the
+     * background. Call it when the app returns to the foreground.
      *
-     * @return `true` when the PDP is ready after the check.
+     * @return `true` if the PDP is ready.
      */
     public suspend fun checkHealth(): Boolean =
         withContext(Dispatchers.Main.immediate) {
@@ -339,10 +282,7 @@ public class CerbosEmbeddedPDP(
         withContext(Dispatchers.Main.immediate) { shutdown() }
     }
 
-    /**
-     * Releases the web view and cancels background work. The instance cannot be started again. Safe
-     * to call from any thread, including from inside a coroutine.
-     */
+    /** Releases everything. The instance cannot be started again. */
     public fun close() {
         scope.cancel()
         if (Looper.myLooper() == Looper.getMainLooper()) shutdown()
@@ -369,8 +309,6 @@ public class CerbosEmbeddedPDP(
         cache.remove(offlineCacheKey)
     }
 
-    // MARK: Checks
-
     public suspend fun checkResources(request: CheckResourcesRequest): CheckResourcesResponse =
         perform("checkResources", request)
 
@@ -389,16 +327,11 @@ public class CerbosEmbeddedPDP(
     public suspend fun planResources(request: PlanResourcesRequest): PlanResourcesResponse =
         perform("planResources", request)
 
-    // MARK: Internals
-
-    /**
-     * Runs a bridge call, and if the renderer process died underneath it, rebuilds once and
-     * retries.
-     */
-    private suspend inline fun <reified P, reified R> perform(method: String, params: P): R =
-        withContext(Dispatchers.Main.immediate) {
+    /** Runs a bridge call, rebuilding and retrying once if the renderer died during it. */
+    private suspend inline fun <reified P, reified R> perform(method: String, params: P): R {
+        val paramsJSON = BridgeJson.encode(params)
+        return withContext(Dispatchers.Main.immediate) {
             ensureReady()
-            val paramsJSON = BridgeJson.encode(params)
             try {
                 invoke<R>(method, paramsJSON, configuration.requestTimeout) {
                     CerbosException.Request(it)
@@ -409,8 +342,8 @@ public class CerbosEmbeddedPDP(
                     "warn",
                     "$method failed because the web view is gone (${error.message}); recovering and retrying once",
                 )
-                // Rebuild even if the termination notice has not arrived yet; if it has, the host
-                // already knows the bridge is gone and this joins the restart it triggered.
+                // The termination notice may not have arrived yet; if it has, this joins the
+                // restart it triggered.
                 if (host.isBridgeReady) shutdown()
                 startIfNeeded()
                 ensureReady()
@@ -419,23 +352,20 @@ public class CerbosEmbeddedPDP(
                 }
             }
         }
+    }
 
     private suspend inline fun <reified R> invoke(
         method: String,
         paramsJSON: String?,
         timeout: Duration?,
         noinline failure: (BridgeError) -> CerbosException,
-    ): R = BridgeJson.unwrap(host.call(method, paramsJSON, timeout), failure)
+    ): R = host.call(method, paramsJSON, timeout) { BridgeJson.unwrap<R>(it, failure) }
 
     private fun ensureReady() {
         if (status != Status.Ready) throw CerbosException.NotReady
     }
 
-    /**
-     * One start attempt. [generation] is the value of [startGeneration] when the attempt was
-     * launched; after every suspension the attempt checks it is still current before touching
-     * state.
-     */
+    /** One start attempt. Checks after each suspension that [generation] is still current. */
     private suspend fun performStart(generation: Int) {
         host.verifyBundledResources()?.let { error ->
             _state.update { it.copy(status = Status.Failed(error)) }
@@ -446,6 +376,7 @@ public class CerbosEmbeddedPDP(
             return
         }
         _state.update { it.copy(status = Status.Loading) }
+        scope.launch(Dispatchers.Default) { BridgeJson.warmUp }
         try {
             host.start()
             if (generation != startGeneration) return
@@ -488,11 +419,7 @@ public class CerbosEmbeddedPDP(
                 "Cerbos embedded PDP ready (bundle ${result.bundle?.bundleId ?: "?"}, source ${result.bundle?.source ?: "?"})"
             )
         } catch (error: CerbosException) {
-            if (generation != startGeneration) {
-                // Superseded by stop(), reconfigure() or a restart; that attempt reports its own
-                // outcome.
-                return
-            }
+            if (generation != startGeneration) return
             CerbosLog.error("Cerbos embedded PDP failed to start: ${error.message}")
             _state.update { it.copy(status = Status.Failed(error)) }
         }
@@ -514,8 +441,7 @@ public class CerbosEmbeddedPDP(
                 ),
             updateIntervalSeconds = intervalSeconds,
             activateOnLoad = configuration.activateOnLoad,
-            // Zero means "no timeout" in the bridge, so never let a short duration round down to
-            // it.
+            // Zero means "no timeout" in the bridge.
             initialLoadTimeoutSeconds =
                 maxOf(1.0, configuration.initialLoadTimeout.toDouble(DurationUnit.SECONDS)),
             options =
@@ -541,8 +467,7 @@ public class CerbosEmbeddedPDP(
             BridgeEvent.BridgeReady -> Unit
 
             is BridgeEvent.Status -> {
-                // `init` reports its own outcome; this covers later failures (for example after a
-                // restart of the page).
+                // `init` reports its own outcome; this covers failures after that.
                 if (
                     event.status == BridgeStatus.FAILED &&
                         status == Status.Ready &&
@@ -654,9 +579,7 @@ public class CerbosEmbeddedPDP(
     }
 
     private fun handleProcessTermination() {
-        // Android may reclaim the renderer process while the app is in the background.
-        // Rebuild it (the offline cache makes this cheap even without connectivity), within a
-        // budget.
+        // Android may reclaim the renderer in the background. Rebuild it, within a budget.
         startGeneration++
         _state.update {
             it.copy(
@@ -698,17 +621,20 @@ public class CerbosEmbeddedPDP(
     }
 
     public companion object {
-        private val loopbackHosts = setOf("localhost", "127.0.0.1", "::1", "[::1]")
+        // Must match the `http:` hosts allowed by the page's Content Security Policy.
+        private val loopbackHosts = setOf("localhost", "127.0.0.1")
 
         /**
-         * Hub must be reachable from the bridge page, whose Content Security Policy only allows
-         * `https:` and loopback `http:` connections. Rejecting other URLs here gives a
-         * configuration error instead of an opaque network failure from inside the page.
+         * Returns why [url] cannot be used as `hubBaseUrl`, or `null` if it can. The bridge page
+         * only allows `https` and loopback `http`, so anything else would fail later with an opaque
+         * network error.
          */
-        internal fun validateHubBaseUrl(url: String?): CerbosException? {
+        public fun validateHubBaseUrl(url: String?): CerbosException? {
             if (url == null) return null
             val invalid =
-                CerbosException.InvalidRequest("hubBaseUrl $url must be an absolute https URL")
+                CerbosException.InvalidRequest(
+                    "“$url” is not a valid URL. Enter a full URL such as https://api.cerbos.cloud."
+                )
             val uri =
                 try {
                     URI(url)
@@ -723,14 +649,13 @@ public class CerbosEmbeddedPDP(
                 scheme == "http" && host in loopbackHosts -> null
                 else ->
                     CerbosException.InvalidRequest(
-                        "hubBaseUrl $url must use https (plain http is only allowed for localhost)"
+                        "“$url” must use https. Plain http is only allowed for localhost."
                     )
             }
         }
 
         /**
-         * Key under which the policy bundle for [configuration] is cached. Keep in sync with
-         * `bundleCacheKey` in core.ts.
+         * The offline cache key for [configuration]. Keep in sync with `bundleCacheKey` in core.ts.
          */
         public fun offlineCacheKey(configuration: Configuration): String {
             val baseUrl = (configuration.hubBaseUrl ?: "https://api.cerbos.cloud").trimEnd('/')

@@ -28,9 +28,8 @@ export interface SerializedError {
   name: string;
   message: string;
   /**
-   * Coarse classification for initialisation failures: `engine` (WebAssembly unavailable or the
-   * module failed to load), `policySource` (Cerbos Hub rejected the request, could not serve the
-   * bundle, or was unreachable with no cached bundle to fall back on), or `bridge` (anything else).
+   * Init failures only: `engine` (WebAssembly unavailable or broken), `policySource` (Hub rejected
+   * the request, or was unreachable with no cached bundle) or `bridge` (anything else).
    */
   kind?: ErrorKind;
   /** gRPC status code for `NotOK` errors. */
@@ -40,7 +39,7 @@ export interface SerializedError {
   stack?: string;
 }
 
-/** Events pushed from the bridge to the native host (fire-and-forget). */
+/** Events sent to the native host. */
 export type BridgeEvent =
   | { type: "bridgeReady" }
   | { type: "status"; status: BridgeStatus; error?: SerializedError }
@@ -57,7 +56,7 @@ export class EngineError extends Error {
   public override readonly name = "EngineError";
 }
 
-/** Thrown when the JavaScript engine has no WebAssembly support (for example iOS Lockdown Mode). */
+/** Thrown when the web view has no WebAssembly support (for example iOS Lockdown Mode). */
 export class WebAssemblyUnavailableError extends Error {
   public override readonly name = "WebAssemblyUnavailable";
 
@@ -68,9 +67,9 @@ export class WebAssemblyUnavailableError extends Error {
 
 export interface BridgeHost {
   emit(event: BridgeEvent): void;
-  /** Provides the `@cerbos/embedded-server` WebAssembly module. */
+  /** Provides the engine's WebAssembly module. */
   loadWasm(): Promise<WebAssembly.Module | Response | ArrayBuffer | ArrayBufferView<ArrayBuffer>>;
-  /** Verifies and decodes a JWT on the native side (only used when `jwtDecoding` is enabled). */
+  /** Verifies and decodes a JWT natively (used when `jwtDecoding` is set). */
   decodeJWTPayload?: (jwt: JWT) => Promise<DecodedJWTPayload>;
 }
 
@@ -85,7 +84,7 @@ export interface InitParams {
   /** Seconds between update checks. `0` disables polling. Minimum 10. Default 60. */
   updateIntervalSeconds?: number;
   activateOnLoad?: boolean;
-  /** Abort the very first bundle download after this many seconds so a stalled connection falls back to the cache. Default 20. */
+  /** Seconds before a stalled first download falls back to the cache. Default 20. */
   initialLoadTimeoutSeconds?: number;
   options?: {
     defaultPolicyVersion?: string;
@@ -101,7 +100,7 @@ export interface InitParams {
   };
   emitDecisions?: boolean;
   jwtDecoding?: boolean;
-  /** Persisted `GetBundle` response for this rule, replayed if the initial download fails. */
+  /** The saved `GetBundle` response, used if the first download fails. */
   cachedBundle?: { key: string; body: string } | null;
 }
 
@@ -129,10 +128,12 @@ export class CerbosBridgeCore {
   private status: BridgeStatus = "idle";
   private lastError: SerializedError | undefined;
   private readonly bundleCache: HubBundleCache;
-  /** Incremented per `init`; lets a superseded initialisation notice it must not touch the newer client. */
+  /** Bumped per `init` so a superseded init leaves the newer client alone. */
   private generation = 0;
   private initialised = false;
   private activateOnLoad = true;
+  /** Suppresses decision and validation events for the warm-up check. */
+  private warmingUp = false;
   private activeBundle: BundleInfo | undefined;
   private pendingBundle: BundleInfo | undefined;
 
@@ -144,10 +145,10 @@ export class CerbosBridgeCore {
     this.bundleCache.onBundle = (bundle) => this.handleDownloadedBundle(bundle);
   }
 
-  /** Called whenever the loader receives a bundle from Hub (or the cache replays one). */
+  /** Called for each bundle from Hub or the cache. */
   private handleDownloadedBundle(bundle: BundleInfo): void {
     if (!this.initialised || this.activateOnLoad) {
-      // The initial bundle is always activated by the loader; later ones are when activateOnLoad is set.
+      // The loader always activates the first bundle.
       this.activeBundle = bundle;
       this.pendingBundle = undefined;
     } else {
@@ -164,7 +165,7 @@ export class CerbosBridgeCore {
     });
   }
 
-  /** Entry point used by the native host: JSON in, JSON envelope out. */
+  /** JSON in, JSON envelope out. */
   public async invokeJSON(method: string, paramsJSON: string | null | undefined): Promise<string> {
     let envelope: Envelope;
     try {
@@ -275,10 +276,14 @@ export class CerbosBridgeCore {
     if (options.onValidationError === "throw") {
       embeddedOptions.onValidationError = "throw";
     } else if (options.onValidationError === "report") {
-      embeddedOptions.onValidationError = (errors) => this.host.emit({ type: "validationErrors", errors });
+      embeddedOptions.onValidationError = (errors) => {
+        if (!this.warmingUp) this.host.emit({ type: "validationErrors", errors });
+      };
     }
     if (params.emitDecisions) {
-      embeddedOptions.onDecision = (entry: DecisionLogEntry) => this.host.emit({ type: "decision", entry: toPlain(entry) });
+      embeddedOptions.onDecision = (entry: DecisionLogEntry) => {
+        if (!this.warmingUp) this.host.emit({ type: "decision", entry: toPlain(entry) });
+      };
     }
     if (params.jwtDecoding) {
       const decode = this.host.decodeJWTPayload;
@@ -293,11 +298,11 @@ export class CerbosBridgeCore {
     this.loader = loader;
 
     try {
-      // Waits for the WebAssembly module to be instantiated and the initial policy bundle to load.
+      // Resolves once the engine is instantiated and the first bundle is loaded.
       await client.serverInfo();
     } catch (error) {
       if (generation !== this.generation) {
-        // A newer init took over while this one was loading; leave its client alone.
+        // A newer init took over; leave its client alone.
         loader.stop();
         throw error;
       }
@@ -307,6 +312,8 @@ export class CerbosBridgeCore {
       this.stop();
       throw new InitError(error, this.lastError.kind);
     }
+
+    await this.warmUp(client);
 
     if (generation !== this.generation) {
       loader.stop();
@@ -327,6 +334,21 @@ export class CerbosBridgeCore {
         builtAt: timestampToISO(serverMetadata.builtAt),
       },
     };
+  }
+
+  /** The first evaluation is slow while V8 compiles the hot paths; pay for it here, not on the app's first check. */
+  private async warmUp(client: Embedded): Promise<void> {
+    this.warmingUp = true;
+    try {
+      await client.checkResources({
+        principal: { id: "warm-up", roles: ["warm-up"] },
+        resources: [{ resource: { kind: "warm-up", id: "warm-up" }, actions: ["warm-up"] }],
+      });
+    } catch {
+      // Only the side effect matters.
+    } finally {
+      this.warmingUp = false;
+    }
   }
 
   private async checkResources(request: CheckResourcesRequest): Promise<unknown> {
@@ -400,7 +422,7 @@ function schemaEnforcement(value: "none" | "warn" | "reject"): SchemaEnforcement
   }
 }
 
-/** Wraps the cause of a failed `init` so the envelope carries its classification. */
+/** Carries the classification of a failed `init` into the envelope. */
 class InitError extends Error {
   public constructor(
     public override readonly cause: unknown,
@@ -412,7 +434,7 @@ class InitError extends Error {
 }
 
 export function classifyInitError(error: unknown): ErrorKind {
-  // The client wraps most failures in NotOK(UNKNOWN, ..., { cause }), so classify the whole chain.
+  // The client wraps most failures in NotOK(UNKNOWN, ..., { cause }), so check the whole chain.
   const chain = causeChain(error);
   if (chain.some(isEngineError)) {
     return "engine";
@@ -420,8 +442,7 @@ export function classifyInitError(error: unknown): ErrorKind {
   const notOK = chain.find((item): item is NotOK => item instanceof NotOK);
   if (notOK) {
     const root = chain[chain.length - 1];
-    // Transport roots: a Connect error carrying a status, an aborted or timed-out request, or the
-    // TypeError that fetch throws when the network is unreachable (WebKit: "Load failed").
+    // Network failures: a Connect error, an aborted or timed-out request, or fetch's TypeError.
     const rootIsTransport =
       root instanceof NotOK ||
       root instanceof TypeError ||
@@ -473,7 +494,7 @@ export function serializeError(error: unknown): SerializedError {
   return { name: "Error", message: String(error) };
 }
 
-/** Strips class prototypes and converts Dates/BigInts so the value survives JSON serialisation. */
+/** Makes a value JSON-safe (drops prototypes, converts BigInts). */
 function toPlain<T>(value: T): unknown {
   return JSON.parse(JSON.stringify(value, (_key, item: unknown) => (typeof item === "bigint" ? item.toString() : item)));
 }

@@ -15,10 +15,7 @@ import kotlin.time.Duration
 import kotlin.time.TimeSource
 import kotlinx.coroutines.launch
 
-/**
- * Hub connection settings entered in the settings sheet. The secret is kept in the Keystore-backed
- * [SecretStore].
- */
+/** Hub connection settings from the settings sheet. The secret is stored by [SecretStore]. */
 data class HubSettings(
     val ruleId: String = DEFAULT_RULE_ID,
     val hubBaseUrl: String = "",
@@ -27,39 +24,19 @@ data class HubSettings(
 ) {
     companion object {
         const val DEFAULT_RULE_ID = "AVGB9RP6HFBL"
-        private val loopbackHosts = setOf("localhost", "127.0.0.1", "::1", "[::1]")
 
-        /**
-         * Validates the optional Hub base URL before it reaches the PDP, so a bad value is reported
-         * in the form instead of surfacing as a start failure. Returns a message naming the
-         * offending value, or `null` when the text is empty or acceptable.
-         */
+        /** Why the optional Hub URL can't be used, or `null` if it's empty or fine. */
         fun hubUrlProblem(text: String): String? {
             val trimmed = text.trim()
             if (trimmed.isEmpty()) return null
-            val uri =
-                try {
-                    java.net.URI(trimmed)
-                } catch (_: java.net.URISyntaxException) {
-                    null
-                }
-            val scheme = uri?.scheme?.lowercase()
-            val host = uri?.host?.lowercase()
-            if (uri == null || scheme == null || host.isNullOrEmpty()) {
-                return "“$trimmed” is not a valid URL. Enter a full URL such as https://api.cerbos.cloud."
-            }
-            if (scheme != "https" && !(scheme == "http" && host in loopbackHosts)) {
-                return "“$trimmed” must use https. Plain http is only allowed for localhost."
-            }
-            return null
+            return (CerbosEmbeddedPDP.validateHubBaseUrl(trimmed)
+                    as? CerbosException.InvalidRequest)
+                ?.reason
         }
     }
 }
 
-/**
- * Owns the single [CerbosEmbeddedPDP] instance for the app (it survives configuration changes with
- * the view model) and the state of the demo screen.
- */
+/** Owns the app's single [CerbosEmbeddedPDP] and the demo screen state. */
 class DemoViewModel(application: Application) : AndroidViewModel(application) {
     private val preferences = application.getSharedPreferences("cerbos.hub", Context.MODE_PRIVATE)
     private val secrets = SecretStore(application)
@@ -84,7 +61,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     var isChecking by mutableStateOf(false)
         private set
 
-    /** Problem persisting the last applied settings (for example a Keystore failure). */
+    /** Set when the last settings could not be saved (for example a Keystore failure). */
     var settingsError by mutableStateOf<String?>(null)
         private set
 
@@ -116,10 +93,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         startPdp()
     }
 
-    /**
-     * First start creates the single PDP instance; later applies reconfigure it in place, which
-     * reuses the already-compiled engine instead of rebuilding the web view.
-     */
+    /** Creates the PDP on first use; afterwards reconfigures it, which reuses the engine. */
     private fun startPdp() {
         lastResult = null
         checkError = null
@@ -141,7 +115,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         val trimmedClientId = settings.clientId.trim()
         return CerbosEmbeddedPDP.Configuration(
             ruleId = settings.ruleId.trim(),
-            // An invalid URL is rejected by the settings sheet; fall back to the default Hub here.
+            // The settings sheet rejects invalid URLs; fall back to the default Hub just in case.
             hubBaseUrl =
                 trimmedUrl.takeIf { it.isNotEmpty() && HubSettings.hubUrlProblem(it) == null },
             credentials =
@@ -165,10 +139,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { pdp?.clearOfflineCache() }
     }
 
-    /**
-     * Android may kill the WebView renderer while the app is in the background; verify and rebuild
-     * on return instead of failing the first check.
-     */
+    /** Called on resume: Android may have killed the engine while the app was in the background. */
     fun checkHealth() {
         viewModelScope.launch { pdp?.checkHealth() }
     }

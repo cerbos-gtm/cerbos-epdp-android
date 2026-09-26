@@ -1,9 +1,9 @@
 /**
- * Android WebView entry point. Loaded by `index.html` inside the hidden `WebView` that hosts the
- * Cerbos embedded PDP. The native side calls `CerbosBridge.invoke(id, method, paramsJSON)` via
- * `WebView.evaluateJavascript` and receives the JSON envelope through `cerbosHost.postResult`;
- * events arrive through `cerbosHost.postMessage`. Both are methods of the `@JavascriptInterface`
- * object the host injects before the page loads.
+ * Android entry point, loaded by `index.html` in the hidden WebView.
+ *
+ * Kotlin calls `CerbosBridge.invoke(id, method, paramsJSON)` with `evaluateJavascript`. The result
+ * goes back through `cerbosHost.postResult(id, envelopeJSON)` and events through
+ * `cerbosHost.postMessage(json)`; `cerbosHost` is the injected `@JavascriptInterface` object.
  */
 import type { JWT } from "@cerbos/core";
 
@@ -11,9 +11,7 @@ import type { BridgeEvent } from "./core.js";
 import { CerbosBridgeCore, EngineError } from "./core.js";
 
 interface AndroidHost {
-  /** Fire-and-forget event (JSON-encoded `BridgeEvent`). */
   postMessage(json: string): void;
-  /** Result of an `invoke` call: the JSON envelope for the given call ID. */
   postResult(id: string, envelopeJSON: string): void;
 }
 
@@ -32,12 +30,11 @@ function emit(event: BridgeEvent): void {
   try {
     host?.postMessage(JSON.stringify(event));
   } catch {
-    // The host is gone; nothing useful to do.
+    // The host is gone.
   }
 }
 
-// Native callbacks (JWT decoding) are request/response over two one-way channels: the bridge
-// emits a `jwtDecode` event and the host answers with `CerbosBridge.resolveCallback`.
+// JWT decoding asks the host with a `jwtDecode` event; it answers with `resolveCallback`.
 const callbackTimeoutMs = 30_000;
 let callbackCounter = 0;
 const pendingCallbacks = new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
@@ -54,9 +51,7 @@ function requestFromHost(event: Extract<BridgeEvent, { id: string }>): Promise<u
   });
 }
 
-// The engine module is compiled once per page and reused by every `init`, so reconfiguring the
-// client (new rule, new credentials) or recovering from a failed policy load does not pay the
-// 20 MB compile again. Only a lost renderer process forces a recompile.
+// Compile the 20 MB engine once per page and reuse it for every `init`.
 let compiledModule: Promise<WebAssembly.Module> | undefined;
 
 function loadEngineModule(): Promise<WebAssembly.Module> {
@@ -64,8 +59,7 @@ function loadEngineModule(): Promise<WebAssembly.Module> {
     return Promise.reject(new EngineError("WebAssembly streaming compilation is not available in this web view"));
   }
   compiledModule ??= (async () => {
-    // Served by the native request interceptor with `Content-Type: application/wasm`, so Chromium
-    // streams it straight into the compiler (no base64, no copies).
+    // Served from the APK as `application/wasm`, so Chromium compiles it while streaming.
     let response: Response;
     try {
       response = await fetch("server.wasm");
@@ -102,12 +96,11 @@ const core = new CerbosBridgeCore({
 
 androidWindow.CerbosBridge = {
   invoke: (id, method, paramsJSON) => {
-    // `evaluateJavascript` cannot await a promise, so the envelope travels back through the host object.
     void core.invokeJSON(method, paramsJSON).then((envelope) => {
       try {
         host?.postResult(id, envelope);
       } catch {
-        // The host is gone; nothing useful to do.
+        // The host is gone.
       }
     });
   },
@@ -130,7 +123,7 @@ androidWindow.CerbosBridge = {
   },
 };
 
-// Surface uncaught problems from the headless page in the native logs.
+// Forward uncaught errors and console warnings to the native logs.
 if (typeof globalThis.addEventListener === "function") {
   globalThis.addEventListener("error", (event) => {
     emit({ type: "log", level: "error", message: `Uncaught error: ${event.message}` });
