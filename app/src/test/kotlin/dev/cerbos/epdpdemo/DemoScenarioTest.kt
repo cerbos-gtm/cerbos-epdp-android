@@ -1,7 +1,10 @@
 package dev.cerbos.epdpdemo
 
+import dev.cerbos.epdp.CerbosEmbeddedPDP
 import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -35,11 +38,32 @@ class DemoScenarioTest {
 class HubSettingsTest {
     @Test
     fun hubUrlValidation() {
-        org.junit.Assert.assertNull(HubSettings.hubUrlProblem(""))
-        org.junit.Assert.assertNull(HubSettings.hubUrlProblem("  https://api.cerbos.cloud  "))
-        org.junit.Assert.assertNull(HubSettings.hubUrlProblem("http://localhost:3592"))
-        org.junit.Assert.assertNotNull(HubSettings.hubUrlProblem("http://10.0.2.2:3592"))
-        org.junit.Assert.assertNotNull(HubSettings.hubUrlProblem("api.cerbos.cloud"))
-        org.junit.Assert.assertNotNull(HubSettings.hubUrlProblem("not a url"))
+        assertNull(HubSettings.hubUrlProblem(""))
+        assertNull(HubSettings.hubUrlProblem("  https://api.cerbos.cloud  "))
+        assertNull(HubSettings.hubUrlProblem("http://localhost:3592"))
+        assertNotNull(HubSettings.hubUrlProblem("http://10.0.2.2:3592"))
+        assertNotNull(HubSettings.hubUrlProblem("api.cerbos.cloud"))
+        assertNotNull(HubSettings.hubUrlProblem("not a url"))
+        assertNotNull(HubSettings.hubUrlProblem("http://[::1]:3592"))
+    }
+
+    @Test
+    fun configurationTrimsInputAndSkipsIncompleteCredentials() {
+        val partial =
+            HubSettings(ruleId = " RULE ", hubBaseUrl = " http://10.0.2.2 ", clientId = " id ")
+                .toConfiguration()
+        assertEquals("RULE", partial.ruleId)
+        assertNull(partial.hubBaseUrl)
+        assertNull(partial.credentials)
+
+        val complete =
+            HubSettings(
+                    hubBaseUrl = "https://hub.example.com",
+                    clientId = " id ",
+                    clientSecret = "secret",
+                )
+                .toConfiguration()
+        assertEquals("https://hub.example.com", complete.hubBaseUrl)
+        assertEquals(CerbosEmbeddedPDP.HubCredentials("id", "secret"), complete.credentials)
     }
 }

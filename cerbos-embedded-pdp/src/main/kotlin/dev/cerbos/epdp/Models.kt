@@ -16,26 +16,20 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 
-// Request and response types mirror the `@cerbos/core` client API, which is what the bridge
-// forwards to `@cerbos/embedded-client`. Field names match the JSON shapes exactly (with `attr`
-// exposed as `attributes` in Kotlin). Attribute values are `JsonElement`s, mirroring
-// `google.protobuf.Value`; use [attributesOf] to build them from Kotlin values.
-
-// MARK: - Attributes
+// Requests and responses mirror the `@cerbos/core` JavaScript API field for field (`attr` is
+// `attributes` in Kotlin). Build attribute values with [attributesOf].
 
 /**
- * Builds an attribute map from Kotlin values: `attributesOf("tier" to "PREMIUM", "level" to 3,
- * "beta" to true)`.
+ * Builds an attribute map: `attributesOf("tier" to "PREMIUM", "level" to 3, "beta" to true)`.
  *
- * Supports `null`, booleans, numbers, strings, [JsonElement]s, and (nested) maps with string keys,
- * iterables and arrays.
+ * Values can be `null`, booleans, numbers, strings, enums, [JsonElement]s, maps, lists and arrays.
  */
 public fun attributesOf(vararg pairs: Pair<String, Any?>): Map<String, JsonElement> =
     pairs.associate { (key, value) ->
         key to value.toJsonElement()
     }
 
-/** Converts a Kotlin value to a [JsonElement] (see [attributesOf] for the supported types). */
+/** Converts a value to a [JsonElement]. See [attributesOf] for the supported types. */
 public fun Any?.toJsonElement(): JsonElement =
     when (this) {
         null -> JsonNull
@@ -55,8 +49,6 @@ public fun Any?.toJsonElement(): JsonElement =
                 "Unsupported attribute value type: ${this::class.java.name}"
             )
     }
-
-// MARK: - Requests
 
 @Serializable
 public data class Principal(
@@ -79,10 +71,7 @@ public data class Resource(
 /** A resource and the actions to check on it. */
 @Serializable public data class ResourceCheck(val resource: Resource, val actions: List<String>)
 
-/**
- * A JWT passed as auxiliary data. It is verified and decoded by the `jwtDecoder` you configure; the
- * embedded PDP never sees the raw token.
- */
+/** A JWT passed as auxiliary data. Your `jwtDecoder` verifies it; the engine only sees claims. */
 @Serializable public data class JWT(val token: String, val keySetId: String? = null)
 
 @Serializable public data class AuxData(val jwt: JWT? = null)
@@ -115,7 +104,7 @@ public data class IsAllowedRequest(
     val requestId: String? = null,
 )
 
-/** The resource kind (and optional known attributes) to plan a query for. */
+/** The resource kind, and any known attributes, to plan a query for. */
 @Serializable
 public data class PlanResource(
     val kind: String,
@@ -143,18 +132,13 @@ public data class PlanResourcesRequest(
     ) : this(principal, resource, listOf(action), auxData, includeMetadata, requestId)
 }
 
-// MARK: - Responses
-
 @Serializable(with = EffectSerializer::class)
 public enum class Effect(public val wireValue: String) {
     ALLOW("EFFECT_ALLOW"),
     DENY("EFFECT_DENY"),
 }
 
-/**
- * Any effect this version does not know is treated as a denial (fail closed) rather than failing
- * the whole response, so the other resources in a batch keep their decisions.
- */
+/** Unknown effects decode as [Effect.DENY] so one odd value doesn't fail a whole batch. */
 internal object EffectSerializer : KSerializer<Effect> {
     override val descriptor: SerialDescriptor =
         PrimitiveSerialDescriptor("Effect", PrimitiveKind.STRING)
@@ -200,9 +184,7 @@ public data class CheckResultMetadata(
     val effectiveDerivedRoles: List<String> = emptyList(),
 )
 
-/**
- * The decision for one resource. Returned by `checkResource`, and per resource by `checkResources`.
- */
+/** The decision for one resource. */
 @Serializable
 public data class CheckResult(
     val resource: ResourceIdentifier,
@@ -232,10 +214,7 @@ public data class CheckResourcesResponse(
         it.resource.kind == kind && it.resource.id == id
     }
 
-    /**
-     * Whether the action is allowed on the identified resource. Missing resources are treated as
-     * denied.
-     */
+    /** Whether the action is allowed. Missing resources count as denied. */
     public fun isAllowed(kind: String, id: String, action: String): Boolean =
         result(kind, id)?.isAllowed(action) ?: false
 }
@@ -252,22 +231,17 @@ public data class PlanResourcesResponse(
     val requestId: String = "",
     val cerbosCallId: String = "",
     val kind: PlanKind,
-    /**
-     * The filter expression tree when [kind] is [PlanKind.CONDITIONAL] (same shape as the
-     * JavaScript SDK's `PlanExpression`).
-     */
+    /** Filter expression when [kind] is [PlanKind.CONDITIONAL] (the JS SDK's `PlanExpression`). */
     val condition: JsonElement? = null,
     val validationErrors: List<ValidationError> = emptyList(),
     val metadata: JsonElement? = null,
 )
 
-// MARK: - Bundle and server information
-
 @Serializable
 public enum class BundleSource {
     /** Downloaded from Cerbos Hub during this session. */
     @SerialName("network") NETWORK,
-    /** Replayed from the on-disk cache because the initial download failed. */
+    /** Loaded from the offline cache because the first download failed. */
     @SerialName("cache") CACHE,
 }
 
@@ -280,7 +254,7 @@ public data class BundleInfo(
     @Serializable(with = InstantSerializer::class) val receivedAt: Instant,
 )
 
-/** Build information of the bundled `@cerbos/embedded-server` WebAssembly module. */
+/** Build information for the bundled engine. */
 @Serializable
 public data class ServerInfo(
     val version: String,
@@ -298,7 +272,7 @@ public data class PolicyUpdate(
         get() = error == null
 }
 
-/** ISO 8601 timestamps as produced by JavaScript's `Date.toISOString()`. */
+/** ISO 8601 timestamps, as produced by JavaScript's `Date.toISOString()`. */
 internal object InstantSerializer : KSerializer<Instant> {
     override val descriptor: SerialDescriptor =
         PrimitiveSerialDescriptor("Instant", PrimitiveKind.STRING)

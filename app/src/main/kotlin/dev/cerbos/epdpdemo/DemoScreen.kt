@@ -2,6 +2,7 @@ package dev.cerbos.epdpdemo
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -58,37 +59,58 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.cerbos.epdp.BundleSource
 import dev.cerbos.epdp.CerbosEmbeddedPDP
 import dev.cerbos.epdp.CheckResult
 import dev.cerbos.epdp.Effect
+import dev.cerbos.epdp.ResourceIdentifier
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.microseconds
 import kotlin.time.DurationUnit
 
 private val timeFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
 
 private fun Instant.formatTime(): String = timeFormatter.format(atZone(ZoneId.systemDefault()))
 
+/** Connects [DemoScreen] to the view model. */
+@Composable
+fun DemoRoute(viewModel: DemoViewModel) {
+    val state by viewModel.uiState.collectAsStateWithLifecycle()
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.checkHealth() }
+    DemoScreen(
+        state = state,
+        onScenarioChange = viewModel::updateScenario,
+        onRunCheck = viewModel::runCheck,
+        onApplySettings = viewModel::applySettings,
+        onRetry = viewModel::retry,
+        onRestart = viewModel::restart,
+        onClearOfflineCache = viewModel::clearOfflineCache,
+    )
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun DemoScreen(viewModel: DemoViewModel) {
-    val pdp = viewModel.pdp
-    val state by
-        (pdp?.state
-                ?: remember { kotlinx.coroutines.flow.MutableStateFlow(CerbosEmbeddedPDP.State()) })
-            .collectAsStateWithLifecycle()
+fun DemoScreen(
+    state: DemoUiState,
+    onScenarioChange: (DemoScenario) -> Unit,
+    onRunCheck: () -> Unit,
+    onApplySettings: (HubSettings) -> Unit,
+    onRetry: () -> Unit,
+    onRestart: () -> Unit,
+    onClearOfflineCache: () -> Unit,
+) {
+    val pdp = state.pdp ?: CerbosEmbeddedPDP.State()
+    val started = state.pdp != null
     var showsHubSettings by rememberSaveable { mutableStateOf(false) }
     var showsMenu by remember { mutableStateOf(false) }
-
-    // Android may discard the renderer while the app is in the background; verify and rebuild on
-    // return instead of failing the first check.
-    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.checkHealth() }
 
     Scaffold(
         topBar = {
@@ -96,11 +118,10 @@ fun DemoScreen(viewModel: DemoViewModel) {
                 title = {
                     Column {
                         Text("Cerbos ePDP")
-                        val server = state.server
+                        val server = pdp.server
+                        val rule = "rule ${state.settings.ruleId}"
                         Text(
-                            if (server != null)
-                                "Cerbos ${server.version} · rule ${viewModel.settings.ruleId}"
-                            else "rule ${viewModel.settings.ruleId}",
+                            if (server != null) "Cerbos ${server.version} · $rule" else rule,
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -119,20 +140,19 @@ fun DemoScreen(viewModel: DemoViewModel) {
                             leadingIcon = {
                                 Icon(Icons.Default.Refresh, contentDescription = null)
                             },
-                            enabled =
-                                pdp != null && state.status != CerbosEmbeddedPDP.Status.Loading,
+                            enabled = started && pdp.status != CerbosEmbeddedPDP.Status.Loading,
                             onClick = {
                                 showsMenu = false
-                                viewModel.restart()
+                                onRestart()
                             },
                         )
                         DropdownMenuItem(
                             text = { Text("Clear offline cache") },
                             leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null) },
-                            enabled = pdp != null,
+                            enabled = started,
                             onClick = {
                                 showsMenu = false
-                                viewModel.clearOfflineCache()
+                                onClearOfflineCache()
                             },
                         )
                     }
@@ -142,20 +162,23 @@ fun DemoScreen(viewModel: DemoViewModel) {
     ) { padding ->
         LazyColumn(
             modifier = Modifier.padding(padding).fillMaxWidth(),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+            contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             item {
-                StatusSection(
-                    pdp != null,
-                    state,
-                    settingsError = viewModel.settingsError,
-                    onRetry = viewModel::retry,
+                StatusSection(started, pdp, settingsError = state.settingsError, onRetry = onRetry)
+            }
+            item {
+                CheckSection(
+                    scenario = state.scenario,
+                    check = state.check,
+                    isReady = pdp.isReady,
+                    onScenarioChange = onScenarioChange,
+                    onRunCheck = onRunCheck,
                 )
             }
-            item { CheckSection(viewModel, state) }
-            if (state.logs.isNotEmpty()) {
-                item { LogsSection(state.logs) }
+            if (pdp.logs.isNotEmpty()) {
+                item { LogsSection(pdp.logs) }
             }
         }
     }
@@ -164,19 +187,17 @@ fun DemoScreen(viewModel: DemoViewModel) {
         val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
         ModalBottomSheet(onDismissRequest = { showsHubSettings = false }, sheetState = sheetState) {
             HubSettingsSheet(
-                initial = viewModel.settings,
-                isLoading = state.status == CerbosEmbeddedPDP.Status.Loading,
+                initial = state.settings,
+                isLoading = pdp.status == CerbosEmbeddedPDP.Status.Loading,
                 onCancel = { showsHubSettings = false },
                 onApply = { settings ->
                     showsHubSettings = false
-                    viewModel.apply(settings)
+                    onApplySettings(settings)
                 },
             )
         }
     }
 }
-
-// MARK: - Sections
 
 @Composable
 private fun SectionHeader(title: String) {
@@ -227,12 +248,7 @@ private fun StatusSection(
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp)) {
                 if (!started) {
-                    Text("Not started", style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        "Configure a Cerbos Hub rule to load policies.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    StatusBanner(CerbosEmbeddedPDP.Status.Loading)
                 } else {
                     StatusBanner(state.status)
                     val bundle = state.bundle
@@ -243,7 +259,7 @@ private fun StatusSection(
                         LabeledContent("Rule revision", bundle.ruleRevision)
                         LabeledContent(
                             "Loaded from",
-                            if (bundle.source == dev.cerbos.epdp.BundleSource.CACHE) "Offline cache"
+                            if (bundle.source == BundleSource.CACHE) "Offline cache"
                             else "Cerbos Hub",
                         )
                         LabeledContent("Received", bundle.receivedAt.formatTime())
@@ -304,15 +320,20 @@ private fun StatusSection(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun CheckSection(viewModel: DemoViewModel, state: CerbosEmbeddedPDP.State) {
-    val scenario = viewModel.scenario
+private fun CheckSection(
+    scenario: DemoScenario,
+    check: CheckUiState,
+    isReady: Boolean,
+    onScenarioChange: (DemoScenario) -> Unit,
+    onRunCheck: () -> Unit,
+) {
     Column {
         SectionHeader("Check")
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 OutlinedTextField(
                     value = scenario.principalId,
-                    onValueChange = { viewModel.scenario = scenario.copy(principalId = it) },
+                    onValueChange = { onScenarioChange(scenario.copy(principalId = it)) },
                     label = { Text("Principal ID") },
                     singleLine = true,
                     keyboardOptions =
@@ -328,7 +349,7 @@ private fun CheckSection(viewModel: DemoViewModel, state: CerbosEmbeddedPDP.Stat
                     DemoScenario.ROLES.forEachIndexed { index, role ->
                         SegmentedButton(
                             selected = scenario.role == role,
-                            onClick = { viewModel.scenario = scenario.copy(role = role) },
+                            onClick = { onScenarioChange(scenario.copy(role = role)) },
                             shape =
                                 SegmentedButtonDefaults.itemShape(
                                     index = index,
@@ -347,12 +368,12 @@ private fun CheckSection(viewModel: DemoViewModel, state: CerbosEmbeddedPDP.Stat
                     Text("Principal owns the resource", style = MaterialTheme.typography.bodyMedium)
                     Switch(
                         checked = scenario.ownsResource,
-                        onCheckedChange = { viewModel.scenario = scenario.copy(ownsResource = it) },
+                        onCheckedChange = { onScenarioChange(scenario.copy(ownsResource = it)) },
                     )
                 }
                 Button(
-                    onClick = viewModel::runCheck,
-                    enabled = state.isReady && !viewModel.isChecking,
+                    onClick = onRunCheck,
+                    enabled = isReady && !check.isChecking,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Icon(
@@ -362,12 +383,12 @@ private fun CheckSection(viewModel: DemoViewModel, state: CerbosEmbeddedPDP.Stat
                     )
                     Spacer(Modifier.width(8.dp))
                     Text("Check access to ${DemoScenario.RESOURCE_KIND} #1")
-                    if (viewModel.isChecking) {
+                    if (check.isChecking) {
                         Spacer(Modifier.width(12.dp))
                         CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
                     }
                 }
-                val checkError = viewModel.checkError
+                val checkError = check.error
                 if (checkError != null) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
@@ -384,11 +405,11 @@ private fun CheckSection(viewModel: DemoViewModel, state: CerbosEmbeddedPDP.Stat
                         )
                     }
                 }
-                val lastResult = viewModel.lastResult
+                val lastResult = check.result
                 if (lastResult != null) {
                     HorizontalDivider()
                     DemoScenario.ACTIONS.forEach { action -> EffectRow(action, lastResult) }
-                    val duration = viewModel.lastDuration
+                    val duration = check.duration
                     if (duration != null) {
                         Text(
                             "Evaluated locally in ${duration.format()}",
@@ -423,8 +444,9 @@ private fun LogsSection(logs: List<CerbosEmbeddedPDP.LogLine>) {
                                 ),
                             color =
                                 when (line.level) {
-                                    "error" -> MaterialTheme.colorScheme.error
-                                    "warn" -> Orange
+                                    CerbosEmbeddedPDP.LogLevel.ERROR ->
+                                        MaterialTheme.colorScheme.error
+                                    CerbosEmbeddedPDP.LogLevel.WARN -> Orange
                                     else -> MaterialTheme.colorScheme.onSurface
                                 },
                         )
@@ -439,8 +461,6 @@ private fun LogsSection(logs: List<CerbosEmbeddedPDP.LogLine>) {
         }
     }
 }
-
-// MARK: - Hub settings
 
 @Composable
 private fun HubSettingsSheet(
@@ -554,8 +574,6 @@ private fun HubSettingsSheet(
     }
 }
 
-// MARK: - Rows
-
 private val Green = Color(0xFF2E7D32)
 private val Orange = Color(0xFFEF6C00)
 
@@ -661,5 +679,31 @@ private fun EffectBadge(effect: Effect?) {
             Spacer(Modifier.width(4.dp))
             Text(title, style = MaterialTheme.typography.labelMedium, color = tint)
         }
+    }
+}
+
+@Preview(showBackground = true)
+@Composable
+private fun DemoScreenPreview() {
+    val result =
+        CheckResult(
+            resource = ResourceIdentifier(DemoScenario.RESOURCE_KIND, "1"),
+            actions =
+                DemoScenario.ACTIONS.associateWith { Effect.ALLOW } + ("publish" to Effect.DENY),
+        )
+    DemoTheme {
+        DemoScreen(
+            state =
+                DemoUiState(
+                    pdp = CerbosEmbeddedPDP.State(status = CerbosEmbeddedPDP.Status.Ready),
+                    check = CheckUiState(result = result, duration = 850.microseconds),
+                ),
+            onScenarioChange = {},
+            onRunCheck = {},
+            onApplySettings = {},
+            onRetry = {},
+            onRestart = {},
+            onClearOfflineCache = {},
+        )
     }
 }

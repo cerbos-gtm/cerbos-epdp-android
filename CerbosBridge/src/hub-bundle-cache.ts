@@ -2,20 +2,17 @@ import { fromBinary } from "@bufbuild/protobuf";
 import { GetBundleResponseSchema } from "@cerbos/api/cerbos/cloud/epdp/v2/epdp_pb";
 
 /**
- * Offline cache for Cerbos Hub policy bundles.
+ * Offline cache for Hub policy bundles.
  *
- * `@cerbos/embedded-client` keeps the downloaded policy bundle in memory only, so a cold start
- * without connectivity has no policies to evaluate. This module transparently observes the
- * Hub `BundleService/GetBundle` responses made by the client's `PolicyLoader`:
+ * `@cerbos/embedded-client` only keeps bundles in memory. This wraps `fetch` to watch the loader's
+ * `GetBundle` calls:
  *
- * - every successful response containing a bundle is handed to the native host for persistence;
- * - if the *initial* load fails for a reason that is not the client's fault (offline, DNS, a
- *   stalled connection, a Hub 5xx, a captive portal answering with HTML), the most recently
- *   persisted response for the same rule is replayed once, so the app starts with the last known
- *   policies. HTTP 4xx (disabled rule, bad or revoked credentials) is never masked by the cache.
+ * - each bundle received is handed to the native host to save;
+ * - if the first download fails because of the network or Hub (offline, timeout, 5xx, a captive
+ *   portal), the saved bundle is replayed instead. A 4xx (disabled rule, revoked credentials) is
+ *   never masked.
  *
- * Subsequent update checks still go to Hub as usual; a failed update never replays the cache,
- * because the loader already holds an active bundle in that case.
+ * Later update checks are untouched: the loader keeps its current bundle if they fail.
  */
 
 export interface BundleInfo {
@@ -40,9 +37,8 @@ export class HubBundleCache {
   private loadedOnce = false;
   private initialLoadTimeoutMs = 20_000;
   /**
-   * Incremented by every `configure()` call. A GetBundle request started under an earlier session
-   * belongs to a loader that has since been stopped, so its outcome must neither be observed nor
-   * trigger a cache replay: doing so would consume the fallback that the current session needs.
+   * Bumped by `configure()`. Requests from an older session belong to a stopped loader and must not
+   * use up the current session's fallback.
    */
   private session = 0;
   private _current: BundleInfo | undefined;
@@ -55,7 +51,7 @@ export class HubBundleCache {
     return this._current;
   }
 
-  /** Prepares the cache for a (re)initialised client. */
+  /** Resets the cache for a new client. */
   public configure(key: string, cachedBody: string | undefined, initialLoadTimeoutMs = 20_000): void {
     this.session++;
     this.key = key;
@@ -86,11 +82,9 @@ export class HubBundleCache {
         response = await originalFetch(input, initialLoad ? this.withInitialLoadTimeout(init) : init);
       } catch (error) {
         if (session !== this.session) {
-          // A newer init reconfigured the cache while this request was in flight (typically the
-          // abort caused by stopping the old loader). It must not consume the new session's fallback.
           throw error;
         }
-        // Offline, DNS failure, connection refused, or the initial-load timeout.
+        // Offline, DNS failure, connection refused, or the first-download timeout.
         const fallback = this.fallback(`network error: ${String(error)}`);
         if (fallback) {
           return fallback;
@@ -99,14 +93,11 @@ export class HubBundleCache {
       }
 
       if (session !== this.session) {
-        // Superseded while in flight: hand the response to the (already stopped) loader untouched.
         return response;
       }
 
       if (!response.ok) {
-        // Server-side trouble is a reason to keep going with the last known policies. A client
-        // error (disabled rule, bad or revoked credentials, unknown rule) must surface instead:
-        // replaying the cache would let a revoked bundle keep working on every cold start.
+        // Fall back on server trouble only. Masking a 4xx would keep a revoked rule working.
         if (this.isRetryableStatus(response.status)) {
           const fallback = this.fallback(`HTTP ${response.status}`);
           if (fallback) {
@@ -119,7 +110,7 @@ export class HubBundleCache {
 
       const validated = await this.observe(response);
       if (validated === "invalid") {
-        // A 200 that is not a bundle (captive portal, proxy error page, HTML login page).
+        // A 200 that isn't a bundle, such as a captive portal page.
         const fallback = this.fallback("response is not a policy bundle");
         if (fallback) {
           return fallback;
@@ -129,7 +120,7 @@ export class HubBundleCache {
     };
   }
 
-  /** Bounds the very first bundle download so a stalled connection cannot block start-up forever. */
+  /** Stops a stalled first download from blocking start-up. */
   private withInitialLoadTimeout(init: RequestInit | undefined): RequestInit | undefined {
     if (this.initialLoadTimeoutMs <= 0 || typeof AbortSignal.timeout !== "function") {
       return init;
