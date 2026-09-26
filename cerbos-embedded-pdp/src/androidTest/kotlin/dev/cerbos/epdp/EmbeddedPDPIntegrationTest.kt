@@ -82,14 +82,14 @@ class EmbeddedPDPIntegrationTest {
                 val online = CerbosEmbeddedPDP(context, configuration, cache)
                 online.start()
                 assertEquals(
-                    "online start failed: ${online.status}; logs: ${online.logs.map { it.message }}",
+                    "online start failed: ${online.state.value.status}; logs: ${online.state.value.logs.map { it.message }}",
                     CerbosEmbeddedPDP.Status.Ready,
-                    online.status,
+                    online.state.value.status,
                 )
-                val onlineBundle = checkNotNull(online.bundle)
+                val onlineBundle = checkNotNull(online.state.value.bundle)
                 assertEquals(BundleSource.NETWORK, onlineBundle.source)
                 assertTrue(onlineBundle.bundleId.isNotEmpty())
-                assertTrue(online.server?.version?.isNotEmpty() == true)
+                assertTrue(online.state.value.server?.version?.isNotEmpty() == true)
 
                 // 2. Decisions are evaluated locally and come back well-formed.
                 val response = online.checkResources(request)
@@ -120,16 +120,16 @@ class EmbeddedPDPIntegrationTest {
                 val reconfigureStart = TimeSource.Monotonic.markNow()
                 online.reconfigure(configuration.copy(scopes = emptyList()))
                 assertEquals(
-                    "reconfigure failed: ${online.status}",
+                    "reconfigure failed: ${online.state.value.status}",
                     CerbosEmbeddedPDP.Status.Ready,
-                    online.status,
+                    online.state.value.status,
                 )
-                assertEquals(BundleSource.NETWORK, online.bundle?.source)
+                assertEquals(BundleSource.NETWORK, online.state.value.bundle?.source)
                 assertTrue(reconfigureStart.elapsedNow() < 60.seconds)
                 assertTrue(online.checkHealth())
 
                 // 3. The bundle was persisted for offline starts (the cache write is asynchronous).
-                val onlineKey = online.offlineCacheKey
+                val onlineKey = CerbosEmbeddedPDP.offlineCacheKey(online.configuration)
                 var cached = cache.load(onlineKey)
                 repeat(50) {
                     if (cached == null) {
@@ -148,19 +148,19 @@ class EmbeddedPDPIntegrationTest {
                 val offline = CerbosEmbeddedPDP(context, offlineConfiguration, cache)
                 // The cache key includes the Hub URL; seed the entry for the unreachable one.
                 cache.save(
-                    key = offline.offlineCacheKey,
+                    key = CerbosEmbeddedPDP.offlineCacheKey(offline.configuration),
                     body = cachedEntry.body,
                     bundleId = cachedEntry.entry.bundleId,
                     ruleRevision = cachedEntry.entry.ruleRevision,
                 )
                 offline.start()
                 assertEquals(
-                    "offline start failed: ${offline.status}; logs: ${offline.logs.map { it.message }}",
+                    "offline start failed: ${offline.state.value.status}; logs: ${offline.state.value.logs.map { it.message }}",
                     CerbosEmbeddedPDP.Status.Ready,
-                    offline.status,
+                    offline.state.value.status,
                 )
-                assertEquals(BundleSource.CACHE, offline.bundle?.source)
-                assertEquals(onlineBundle.bundleId, offline.bundle?.bundleId)
+                assertEquals(BundleSource.CACHE, offline.state.value.bundle?.source)
+                assertEquals(onlineBundle.bundleId, offline.state.value.bundle?.bundleId)
                 val offlineResponse = offline.checkResources(request)
                 assertEquals(
                     response.results.map { it.actions },
@@ -178,7 +178,7 @@ class EmbeddedPDPIntegrationTest {
                         PolicyBundleCache(temporaryDirectory()),
                     )
                 uncached.start()
-                val status = uncached.status
+                val status = uncached.state.value.status
                 assertTrue(
                     "expected the uncached offline start to fail, got $status",
                     status is CerbosEmbeddedPDP.Status.Failed,
@@ -204,12 +204,12 @@ class EmbeddedPDPIntegrationTest {
                 superseded.reconfigure(configuration)
                 firstStart.join()
                 assertEquals(
-                    "reconfigure during loading failed: ${superseded.status}; logs: ${superseded.logs.map { it.message }}",
+                    "reconfigure during loading failed: ${superseded.state.value.status}; logs: ${superseded.state.value.logs.map { it.message }}",
                     CerbosEmbeddedPDP.Status.Ready,
-                    superseded.status,
+                    superseded.state.value.status,
                 )
                 assertEquals(configuration, superseded.configuration)
-                assertEquals(BundleSource.NETWORK, superseded.bundle?.source)
+                assertEquals(BundleSource.NETWORK, superseded.state.value.bundle?.source)
                 assertEquals(2, superseded.checkResources(request).results.size)
 
                 // 7. close() from inside a coroutine still tears the web view down.
@@ -226,8 +226,8 @@ class EmbeddedPDPIntegrationTest {
                     )
                 insecure.start()
                 assertTrue(
-                    "expected InvalidRequest, got ${insecure.status}",
-                    (insecure.status as? CerbosEmbeddedPDP.Status.Failed)?.error
+                    "expected InvalidRequest, got ${insecure.state.value.status}",
+                    (insecure.state.value.status as? CerbosEmbeddedPDP.Status.Failed)?.error
                         is CerbosException.InvalidRequest,
                 )
                 insecure.close()

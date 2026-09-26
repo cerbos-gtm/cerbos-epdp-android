@@ -64,7 +64,7 @@ class DecisionLatencyBenchmark {
             )
         try {
             pdp.start()
-            check(pdp.isReady) { "PDP did not start: ${pdp.status}" }
+            check(pdp.state.value.isReady) { "PDP did not start: ${pdp.state.value.status}" }
             withContext(Dispatchers.Main) {
                 val first = System.nanoTime()
                 pdp.checkResources(request)

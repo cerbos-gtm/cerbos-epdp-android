@@ -10,6 +10,7 @@ import java.time.Instant
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.DurationUnit
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
@@ -44,7 +45,7 @@ public class CerbosEmbeddedPDP(
     context: Context,
     configuration: Configuration,
     private val cache: PolicyBundleCache = PolicyBundleCache(context),
-) {
+) : AutoCloseable {
     public data class HubCredentials(val clientId: String, val clientSecret: String) {
         override fun toString(): String = "HubCredentials(clientId=$clientId, clientSecret=***)"
     }
@@ -121,7 +122,14 @@ public class CerbosEmbeddedPDP(
         public data class Failed(val error: CerbosException) : Status
     }
 
-    public data class LogLine(val date: Instant, val level: String, val message: String)
+    public enum class LogLevel {
+        DEBUG,
+        INFO,
+        WARN,
+        ERROR,
+    }
+
+    public data class LogLine(val date: Instant, val level: LogLevel, val message: String)
 
     public data class State(
         val status: Status = Status.Idle,
@@ -139,35 +147,14 @@ public class CerbosEmbeddedPDP(
     }
 
     private val _state = MutableStateFlow(State())
+    /** Everything observable about the PDP. */
     public val state: StateFlow<State> = _state.asStateFlow()
 
     public var configuration: Configuration = configuration
         private set
 
-    public val status: Status
+    private val status: Status
         get() = _state.value.status
-
-    public val bundle: BundleInfo?
-        get() = _state.value.bundle
-
-    public val pendingBundle: BundleInfo?
-        get() = _state.value.pendingBundle
-
-    public val server: ServerInfo?
-        get() = _state.value.server
-
-    public val lastPolicyUpdate: PolicyUpdate?
-        get() = _state.value.lastPolicyUpdate
-
-    public val logs: List<LogLine>
-        get() = _state.value.logs
-
-    public val isReady: Boolean
-        get() = _state.value.isReady
-
-    /** The offline cache key for the current configuration. */
-    public val offlineCacheKey: String
-        get() = offlineCacheKey(configuration)
 
     private val host = CerbosWebViewHost(context)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -260,7 +247,7 @@ public class CerbosEmbeddedPDP(
                         true
                     } catch (error: CerbosException) {
                         appendLog(
-                            "warn",
+                            LogLevel.WARN,
                             "Health check failed (${error.message}); rebuilding the web view",
                         )
                         stop()
@@ -283,7 +270,7 @@ public class CerbosEmbeddedPDP(
     }
 
     /** Releases everything. The instance cannot be started again. */
-    public fun close() {
+    override fun close() {
         scope.cancel()
         if (Looper.myLooper() == Looper.getMainLooper()) shutdown()
         else mainHandler.post { shutdown() }
@@ -306,7 +293,7 @@ public class CerbosEmbeddedPDP(
 
     /** Removes the cached policy bundle for this configuration. */
     public suspend fun clearOfflineCache() {
-        cache.remove(offlineCacheKey)
+        cache.remove(offlineCacheKey(configuration))
     }
 
     public suspend fun checkResources(request: CheckResourcesRequest): CheckResourcesResponse =
@@ -339,7 +326,7 @@ public class CerbosEmbeddedPDP(
             } catch (error: CerbosException) {
                 if (!error.isWebViewFailure || !configuration.retryAfterRecovery) throw error
                 appendLog(
-                    "warn",
+                    LogLevel.WARN,
                     "$method failed because the web view is gone (${error.message}); recovering and retrying once",
                 )
                 // The termination notice may not have arrived yet; if it has, this joins the
@@ -383,14 +370,15 @@ public class CerbosEmbeddedPDP(
 
             var cachedBundle: BridgeInitParams.CachedBundle? = null
             if (configuration.offlineCache) {
-                cache.load(offlineCacheKey)?.let { cached ->
+                val key = offlineCacheKey(configuration)
+                cache.load(key)?.let { cached ->
                     cachedBundle =
                         BridgeInitParams.CachedBundle(
-                            key = offlineCacheKey,
+                            key = key,
                             body = Base64.encodeToString(cached.body, Base64.NO_WRAP),
                         )
                     appendLog(
-                        "info",
+                        LogLevel.INFO,
                         "Offline cache has bundle ${cached.entry.bundleId} from ${cached.entry.savedAt}",
                     )
                 }
@@ -481,17 +469,17 @@ public class CerbosEmbeddedPDP(
 
             is BridgeEvent.Bundles -> {
                 val active = event.active
-                if (active != null && active != bundle) {
+                if (active != null && active != _state.value.bundle) {
                     appendLog(
-                        "info",
+                        LogLevel.INFO,
                         "Policy bundle ${active.bundleId} (revision ${active.ruleRevision}) active, loaded from " +
                             active.source.name.lowercase(),
                     )
                 }
                 val pending = event.pending
-                if (pending != null && pending != pendingBundle) {
+                if (pending != null && pending != _state.value.pendingBundle) {
                     appendLog(
-                        "info",
+                        LogLevel.INFO,
                         "Policy bundle ${pending.bundleId} downloaded; call activatePendingBundle() to use it",
                     )
                 }
@@ -512,7 +500,7 @@ public class CerbosEmbeddedPDP(
                     )
                 }
                 if (!event.ok && event.error != null) {
-                    appendLog("warn", "Policy update failed: ${event.error.message}")
+                    appendLog(LogLevel.WARN, "Policy update failed: ${event.error.message}")
                 }
             }
 
@@ -528,7 +516,7 @@ public class CerbosEmbeddedPDP(
                         Base64.decode(event.body, Base64.DEFAULT)
                     } catch (_: IllegalArgumentException) {
                         appendLog(
-                            "error",
+                            LogLevel.ERROR,
                             "Failed to cache policy bundle: the bridge sent invalid base64",
                         )
                         return
@@ -537,20 +525,20 @@ public class CerbosEmbeddedPDP(
                     try {
                         cache.save(event.key, data, event.bundleId, event.ruleRevision)
                         appendLog(
-                            "debug",
+                            LogLevel.DEBUG,
                             "Cached policy bundle ${event.bundleId} (${data.size} bytes) for offline start",
                         )
                     } catch (error: CerbosException) {
-                        appendLog("error", "Failed to cache policy bundle: ${error.message}")
+                        appendLog(LogLevel.ERROR, "Failed to cache policy bundle: ${error.message}")
                     }
                 }
             }
 
-            is BridgeEvent.Log -> appendLog(event.level, event.message)
+            is BridgeEvent.Log -> appendLog(logLevel(event.level), event.message)
 
             is BridgeEvent.JwtDecode -> decodeJWT(event.id, event.token, event.keySetId)
 
-            is BridgeEvent.Unknown -> appendLog("warn", "Unknown bridge event ${event.type}")
+            is BridgeEvent.Unknown -> appendLog(LogLevel.WARN, "Unknown bridge event ${event.type}")
         }
     }
 
@@ -572,6 +560,8 @@ public class CerbosEmbeddedPDP(
                     payloadJSON = BridgeJson.encode(claims),
                     errorMessage = null,
                 )
+            } catch (error: CancellationException) {
+                throw error
             } catch (error: Exception) {
                 host.resolveCallback(id, payloadJSON = null, errorMessage = error.toString())
             }
@@ -594,7 +584,7 @@ public class CerbosEmbeddedPDP(
         restartTimes.removeAll { it.isBefore(windowStart) }
         if (restartTimes.size >= configuration.maximumRestarts) {
             appendLog(
-                "error",
+                LogLevel.ERROR,
                 "Renderer process terminated ${restartTimes.size} times within ${configuration.restartWindow}; " +
                     "not restarting automatically. Call start() to retry.",
             )
@@ -602,17 +592,26 @@ public class CerbosEmbeddedPDP(
         }
         restartTimes.add(now)
         appendLog(
-            "warn",
+            LogLevel.WARN,
             "Renderer process terminated; restarting (${restartTimes.size}/${configuration.maximumRestarts} in the current window)",
         )
         scope.launch { startIfNeeded() }
     }
 
-    private fun appendLog(level: String, message: String) {
+    private fun logLevel(wire: String): LogLevel =
+        when (wire) {
+            "error" -> LogLevel.ERROR
+            "warn" -> LogLevel.WARN
+            "info" -> LogLevel.INFO
+            else -> LogLevel.DEBUG
+        }
+
+    private fun appendLog(level: LogLevel, message: String) {
         when (level) {
-            "error" -> CerbosLog.error(message)
-            "warn" -> CerbosLog.warn(message)
-            else -> CerbosLog.debug(message)
+            LogLevel.ERROR -> CerbosLog.error(message)
+            LogLevel.WARN -> CerbosLog.warn(message)
+            LogLevel.INFO -> CerbosLog.info(message)
+            LogLevel.DEBUG -> CerbosLog.debug(message)
         }
         _state.update {
             val logs = it.logs + LogLine(Instant.now(), level, message)

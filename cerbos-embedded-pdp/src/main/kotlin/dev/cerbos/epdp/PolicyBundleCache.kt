@@ -1,10 +1,10 @@
 package dev.cerbos.epdp
 
 import android.content.Context
+import androidx.core.util.AtomicFile
 import java.io.File
 import java.io.IOException
 import java.time.Instant
-import java.util.UUID
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
@@ -45,19 +45,10 @@ public class PolicyBundleCache(
 
     private fun loadLocked(key: String): Cached? {
         val files = files(key)
-        val entry =
-            try {
-                json.decodeFromString(Entry.serializer(), files.entry.readText())
-            } catch (_: IOException) {
-                null
-            } catch (_: SerializationException) {
-                null
-            } catch (_: IllegalArgumentException) {
-                null
-            }
+        val entry = readEntry(files.entry)
         val body =
             try {
-                if (files.body.isFile) files.body.readBytes() else null
+                files.body.readFully()
             } catch (_: IOException) {
                 null
             }
@@ -93,10 +84,10 @@ public class PolicyBundleCache(
                     if (!directory.isDirectory && !directory.mkdirs() && !directory.isDirectory) {
                         throw IOException("could not create ${directory.path}")
                     }
-                    writeAtomically(files.body) { it.writeBytes(body) }
-                    writeAtomically(files.entry) {
-                        it.writeText(json.encodeToString(Entry.serializer(), entry))
-                    }
+                    files.body.write(body)
+                    files.entry.write(
+                        json.encodeToString(Entry.serializer(), entry).encodeToByteArray()
+                    )
                 } catch (error: IOException) {
                     throw CerbosException.Cache(error.message ?: error.toString())
                 }
@@ -117,25 +108,29 @@ public class PolicyBundleCache(
         withContext(ioDispatcher) {
             (directory.listFiles() ?: emptyArray())
                 .filter { it.extension == "json" }
-                .mapNotNull { file ->
-                    try {
-                        json.decodeFromString(Entry.serializer(), file.readText())
-                    } catch (_: IOException) {
-                        null
-                    } catch (_: SerializationException) {
-                        null
-                    } catch (_: IllegalArgumentException) {
-                        null
-                    }
-                }
+                .mapNotNull { readEntry(AtomicFile(it)) }
                 .sortedByDescending { it.savedAt }
         }
 
-    private class Files(val body: File, val entry: File)
+    private fun readEntry(file: AtomicFile): Entry? =
+        try {
+            json.decodeFromString(Entry.serializer(), file.readFully().decodeToString())
+        } catch (_: IOException) {
+            null
+        } catch (_: SerializationException) {
+            null
+        } catch (_: IllegalArgumentException) {
+            null
+        }
+
+    private class Files(val body: AtomicFile, val entry: AtomicFile)
 
     private fun files(key: String): Files {
         val name = fileName(key)
-        return Files(body = File(directory, "$name.bundle"), entry = File(directory, "$name.json"))
+        return Files(
+            body = AtomicFile(File(directory, "$name.bundle")),
+            entry = AtomicFile(File(directory, "$name.json")),
+        )
     }
 
     private fun removeFiles(files: Files) {
@@ -143,16 +138,14 @@ public class PolicyBundleCache(
         files.entry.delete()
     }
 
-    private fun writeAtomically(target: File, write: (File) -> Unit) {
-        val temporary = File(target.parentFile, "${target.name}.${UUID.randomUUID()}.tmp")
-        write(temporary)
-        if (!temporary.renameTo(target)) {
-            // `renameTo` does not replace on every filesystem; fall back to delete-then-rename.
-            target.delete()
-            if (!temporary.renameTo(target)) {
-                temporary.delete()
-                throw IOException("could not move ${temporary.name} into place")
-            }
+    private fun AtomicFile.write(bytes: ByteArray) {
+        val stream = startWrite()
+        try {
+            stream.write(bytes)
+            finishWrite(stream)
+        } catch (error: IOException) {
+            failWrite(stream)
+            throw error
         }
     }
 

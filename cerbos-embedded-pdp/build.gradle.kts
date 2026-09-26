@@ -26,8 +26,9 @@ android {
 kotlin { explicitApi() }
 
 dependencies {
-    implementation(libs.kotlinx.coroutines.android)
-    implementation(libs.kotlinx.serialization.json)
+    // Part of the public API (StateFlow, JsonElement).
+    api(libs.kotlinx.coroutines.android)
+    api(libs.kotlinx.serialization.json)
     implementation(libs.androidx.core.ktx)
 
     testImplementation(libs.junit)

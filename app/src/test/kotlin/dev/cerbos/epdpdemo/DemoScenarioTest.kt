@@ -1,5 +1,6 @@
 package dev.cerbos.epdpdemo
 
+import dev.cerbos.epdp.CerbosEmbeddedPDP
 import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -44,5 +45,25 @@ class HubSettingsTest {
         assertNotNull(HubSettings.hubUrlProblem("api.cerbos.cloud"))
         assertNotNull(HubSettings.hubUrlProblem("not a url"))
         assertNotNull(HubSettings.hubUrlProblem("http://[::1]:3592"))
+    }
+
+    @Test
+    fun configurationTrimsInputAndSkipsIncompleteCredentials() {
+        val partial =
+            HubSettings(ruleId = " RULE ", hubBaseUrl = " http://10.0.2.2 ", clientId = " id ")
+                .toConfiguration()
+        assertEquals("RULE", partial.ruleId)
+        assertNull(partial.hubBaseUrl)
+        assertNull(partial.credentials)
+
+        val complete =
+            HubSettings(
+                    hubBaseUrl = "https://hub.example.com",
+                    clientId = " id ",
+                    clientSecret = "secret",
+                )
+                .toConfiguration()
+        assertEquals("https://hub.example.com", complete.hubBaseUrl)
+        assertEquals(CerbosEmbeddedPDP.HubCredentials("id", "secret"), complete.credentials)
     }
 }
