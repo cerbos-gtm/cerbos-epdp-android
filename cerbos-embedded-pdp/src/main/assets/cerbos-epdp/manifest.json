@@ -1,21 +1,21 @@
 {
   "versions": {
     "@cerbos/embedded-client": "0.8.1",
-    "@cerbos/embedded-server": "0.7.1",
+    "@cerbos/embedded-server": "0.7.2",
     "@cerbos/core": "0.33.1",
     "@cerbos/api": "0.11.1"
   },
   "server": {
-    "cerbosVersion": "0.55.0",
-    "cerbosCommitHash": "2901f6421b08bb544049bf0fae4e61ebfd52d59b",
-    "wasmChecksum": "25eb18c22b6700d927bcb9dae5fd91c830e917f5d3005d1cb7e161c6af138a13",
-    "builtAt": "2026-08-13T09:19:02.287Z"
+    "cerbosVersion": "0.56.0",
+    "cerbosCommitHash": "98604d71b79dafdc16ac57e4712fc435227e7c0f",
+    "wasmChecksum": "2a479c334f3953c975d8e973997e088ac410a47a4cb3d9f08d596226513b66ff",
+    "builtAt": "2026-09-30T08:26:50.423Z"
   },
   "wasm": {
-    "byteCount": 19900038,
-    "sha256": "25eb18c22b6700d927bcb9dae5fd91c830e917f5d3005d1cb7e161c6af138a13"
+    "byteCount": 19799745,
+    "sha256": "2a479c334f3953c975d8e973997e088ac410a47a4cb3d9f08d596226513b66ff"
   },
   "bridge": {
-    "byteCount": 733490
+    "byteCount": 735628
   }
 }
