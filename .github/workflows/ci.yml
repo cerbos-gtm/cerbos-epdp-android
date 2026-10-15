@@ -61,7 +61,7 @@ jobs:
       - run: ./gradlew lintDebug testDebugUnitTest assembleDebug assembleRelease assembleDebugAndroidTest
       - name: Upload reports (on failure)
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: android-reports
           path: |
@@ -95,7 +95,7 @@ jobs:
           script: ./gradlew :cerbos-embedded-pdp:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.CERBOS_RULE_ID=${{ env.CERBOS_RULE_ID }}
       - name: Upload reports (on failure)
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: instrumented-reports
           path: |
