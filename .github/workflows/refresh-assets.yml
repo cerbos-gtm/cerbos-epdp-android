@@ -1,0 +1,73 @@
+name: Refresh embedded assets
+
+# Updates the Cerbos packages to their latest releases, rebuilds the bridge and the embedded PDP
+# WebAssembly module, and opens (or updates) a pull request when the committed assets change.
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+env:
+  CERBOS_RULE_ID: ${{ vars.CERBOS_RULE_ID || 'AVGB9RP6HFBL' }}
+
+jobs:
+  refresh:
+    name: Rebuild assets and open a pull request
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pull-requests: write
+    defaults:
+      run:
+        working-directory: CerbosBridge
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: CerbosBridge/package-lock.json
+      - name: Update the Cerbos packages to their latest releases
+        run: |
+          jq -r '.dependencies | keys[] | select(startswith("@cerbos/") or startswith("@bufbuild/")) | . + "@latest"' package.json \
+            | xargs npm install
+      - run: npm run typecheck
+      - run: npm run build
+      - name: Smoke test against the real engine and Cerbos Hub
+        run: npm test
+      - name: Summarise the changes
+        id: summary
+        run: |
+          {
+            echo 'body<<EOF'
+            echo 'Automated weekly refresh of the Cerbos packages and the embedded assets built from them.'
+            echo
+            echo '```diff'
+            git diff -U0 -- package.json ../cerbos-embedded-pdp/src/main/assets/cerbos-epdp/manifest.json | grep '^[+-] ' || true
+            echo '```'
+            echo EOF
+          } >> "$GITHUB_OUTPUT"
+      - uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          # Pull requests opened with the default GITHUB_TOKEN do not trigger the CI workflow. Set the
+          # ASSETS_PR_TOKEN secret (a GitHub App or fine-grained token) so CI runs on the pull request.
+          token: ${{ secrets.ASSETS_PR_TOKEN || github.token }}
+          branch: automation/refresh-embedded-assets
+          delete-branch: true
+          commit-message: Refresh embedded Cerbos assets
+          title: Refresh embedded Cerbos assets
+          body: ${{ steps.summary.outputs.body }}
+          signoff: true
+          add-paths: |
+            CerbosBridge/package.json
+            CerbosBridge/package-lock.json
+            cerbos-embedded-pdp/src/main/assets/cerbos-epdp/**

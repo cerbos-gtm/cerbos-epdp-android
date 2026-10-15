@@ -4,9 +4,11 @@ updates:
     directory: /CerbosBridge
     schedule:
       interval: weekly
+    # The Refresh embedded assets workflow updates these, because it must also rebuild the assets.
+    ignore:
+      - dependency-name: "@cerbos/*"
+      - dependency-name: "@bufbuild/*"
     groups:
-      cerbos:
-        patterns: ["@cerbos/*", "@bufbuild/*"]
       tooling:
         patterns: ["esbuild", "typescript"]
   - package-ecosystem: gradle
